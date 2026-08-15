@@ -5,3 +5,9 @@ test-results/
 reports/playwright-report/
 screenshots/
 *.log
+.history/
+
+UploadStatus/toupload-state.json
+UploadStatus/monitor-health.jsonl
+UploadStatus/upload-audit-summary.json
+UploadStatus/upload-audit.jsonl

@@ -15,7 +15,9 @@ type FileStatus =
   | 'FAILED'
   | 'UPLOAD_UNKNOWN'
   | 'MISSING_FROM_VAULT'
-  | 'DUPLICATE_DETECTED';
+  | 'DUPLICATE_DETECTED'
+  | 'LOCAL_FILE_MISSING'
+  | 'LOCAL_FILE_CHANGED';
 
 type FileState = {
   size: number;
@@ -24,6 +26,7 @@ type FileState = {
   status: FileStatus;
   detectedAt: string;
   uploadedAt?: string;
+  previousStatusBeforeLocalMissing?: FileStatus;
 };
 
 type UploadState = Record<string, FileState>;
@@ -35,6 +38,36 @@ type UploadSummary = {
     fileName: string;
     uploadedAt: string;
   };
+};
+type AuditAction =
+  | 'UPLOAD'
+  | 'SKIP_ALREADY_EXISTS'
+  | 'BLOCK_DUPLICATE'
+  | 'BLOCK_MISSING_FROM_VAULT'
+  | 'BLOCK_LOCAL_FILE_CHANGED'
+  | 'UPLOAD_FAILED'
+  | 'UPLOAD_UNKNOWN';
+
+type AuditEntry = {
+  timestamp: string;
+  fileName: string;
+  previousStatus: FileStatus;
+  vaultMatchesBefore: number;
+  action: AuditAction;
+  vaultMatchesAfter?: number;
+  finalStatus: FileStatus;
+  message?: string;
+};
+
+type AuditSummary = {
+  totalEvents: number;
+  successfulUploads: number;
+  alreadyExists: number;
+  duplicateBlocked: number;
+  missingFromVault: number;
+  localFileChanged: number;
+  uploadFailures: number;
+  unknownResults: number;
 };
 
 const ROOT_DIRECTORY = process.cwd();
@@ -55,6 +88,24 @@ const STATUS_FILE =
   path.join(
     STATUS_DIRECTORY,
     'toupload-state.json',
+  );
+
+  const AUDIT_FILE =
+  path.join(
+    STATUS_DIRECTORY,
+    'upload-audit.jsonl',
+  );
+
+  const AUDIT_SUMMARY_FILE =
+  path.join(
+    STATUS_DIRECTORY,
+    'upload-audit-summary.json',
+  );
+
+  const MONITOR_HEALTH_FILE =
+  path.join(
+    STATUS_DIRECTORY,
+    'monitor-health.jsonl',
   );
 
 const SUMMARY_FILE =
@@ -113,98 +164,96 @@ async function saveUploadState(
 }
 //
 async function loadUploadSummary(): Promise<UploadSummary> {
-  try {
-    const raw =
-      await fs.readFile(
-        SUMMARY_FILE,
-        'utf8',
+  const state =
+    await loadUploadState();
+
+  const uploadedEntries =
+    Object.entries(state)
+      .filter(
+        ([, fileState]) =>
+          (
+            fileState.status ===
+              'UPLOADED' ||
+            (
+              fileState.status ===
+                'LOCAL_FILE_MISSING' &&
+              fileState.previousStatusBeforeLocalMissing ===
+                'UPLOADED'
+            )
+          ) &&
+          !!fileState.uploadedAt,
       );
 
-    return JSON.parse(
-      raw,
-    ) as UploadSummary;
-  } catch {
-    // -----------------------------------------
-    // First-time summary initialization
-    // -----------------------------------------
-    // Rebuild the initial summary from the
-    // existing persistent upload state.
-    //
-    // This preserves the history of uploads
-    // that happened before upload-summary.json
-    // was introduced.
-
-    const state =
-      await loadUploadState();
-
-    const uploadedEntries =
-      Object.entries(state)
-        .filter(
-          ([, fileState]) =>
-            fileState.status === 'UPLOADED' &&
-            !!fileState.uploadedAt,
-        );
-
-    const alreadyExistsEntries =
-      Object.entries(state)
-        .filter(
-          ([, fileState]) =>
+  const alreadyExistsEntries =
+    Object.entries(state)
+      .filter(
+        ([, fileState]) =>
+          fileState.status ===
+            'ALREADY_EXISTS' ||
+          (
             fileState.status ===
-            'ALREADY_EXISTS',
-        );
+              'LOCAL_FILE_MISSING' &&
+            fileState.previousStatusBeforeLocalMissing ===
+              'ALREADY_EXISTS'
+          ),
+      );
 
-    let lastUpload:
-      | {
-          fileName: string;
-          uploadedAt: string;
-        }
-      | undefined;
-
-    for (
-      const [
-        fileName,
-        fileState,
-      ] of uploadedEntries
-    ) {
-      if (!fileState.uploadedAt) {
-        continue;
+  let lastUpload:
+    | {
+        fileName: string;
+        uploadedAt: string;
       }
+    | undefined;
 
-      if (
-        !lastUpload ||
-        fileState.uploadedAt >
-          lastUpload.uploadedAt
-      ) {
-        lastUpload = {
-          fileName,
-          uploadedAt:
-            fileState.uploadedAt,
-        };
-      }
+  for (
+    const [
+      fileName,
+      fileState,
+    ] of uploadedEntries
+  ) {
+    if (!fileState.uploadedAt) {
+      continue;
     }
 
-    const summary: UploadSummary = {
-      totalUploaded:
-        uploadedEntries.length,
-
-      totalAlreadyExists:
-        alreadyExistsEntries.length,
-
-      totalFailed: 0,
-
-      ...(lastUpload
-        ? {
-            lastUpload,
-          }
-        : {}),
-    };
-
-    await saveUploadSummary(
-      summary,
-    );
-
-    return summary;
+    if (
+      !lastUpload ||
+      fileState.uploadedAt >
+        lastUpload.uploadedAt
+    ) {
+      lastUpload = {
+        fileName,
+        uploadedAt:
+          fileState.uploadedAt,
+      };
+    }
   }
+
+  const summary: UploadSummary = {
+    totalUploaded:
+      uploadedEntries.length,
+
+    totalAlreadyExists:
+      alreadyExistsEntries.length,
+
+    totalFailed:
+      Object.values(state).filter(
+        (fileState) =>
+          fileState.status ===
+          'FAILED',
+      ).length,
+
+    ...(lastUpload
+      ? {
+          lastUpload,
+        }
+      : {}),
+  };
+
+  await saveUploadSummary(
+    summary,
+  );
+
+  return summary;
 }
 
 async function saveUploadSummary(
@@ -227,7 +276,601 @@ async function saveUploadSummary(
     'utf8',
   );
 }
-//
+
+async function loadAuditSummary(): Promise<AuditSummary> {
+  try {
+    const raw =
+      await fs.readFile(
+        AUDIT_SUMMARY_FILE,
+        'utf8',
+      );
+
+    return JSON.parse(
+      raw,
+    ) as AuditSummary;
+  } catch {
+      return {
+      totalEvents: 0,
+      successfulUploads: 0,
+      alreadyExists: 0,
+      duplicateBlocked: 0,
+      missingFromVault: 0,
+      localFileChanged: 0,
+      uploadFailures: 0,
+      unknownResults: 0,
+    };
+  }
+}
+
+async function saveAuditSummary(
+  summary: AuditSummary,
+): Promise<void> {
+  await fs.mkdir(
+    STATUS_DIRECTORY,
+    {
+      recursive: true,
+    },
+  );
+
+  await fs.writeFile(
+    AUDIT_SUMMARY_FILE,
+    JSON.stringify(
+      summary,
+      null,
+      2,
+    ),
+    'utf8',
+  );
+}
+
+
+      async function appendAuditLog(
+        entry: AuditEntry,
+      ): Promise<void> {
+        await fs.mkdir(
+          STATUS_DIRECTORY,
+          {
+            recursive: true,
+          },
+        );
+
+        // -----------------------------------------
+        // Append new audit event
+        // -----------------------------------------
+
+        await fs.appendFile(
+          AUDIT_FILE,
+          `${JSON.stringify(entry)}\n`,
+          'utf8',
+        );
+
+        // -----------------------------------------
+        // Rebuild audit summary from audit log
+        // -----------------------------------------
+        // The JSONL audit file is the source of truth.
+        // This prevents summary drift if a previous
+        // summary write was interrupted or duplicated.
+
+        const rawAudit =
+          await fs.readFile(
+            AUDIT_FILE,
+            'utf8',
+          );
+
+        const entries: AuditEntry[] =
+          rawAudit
+            .split(/\r?\n/)
+            .map(
+              (line) =>
+                line.trim(),
+            )
+            .filter(
+              (line) =>
+                line.length > 0,
+            )
+            .map(
+              (line) =>
+                JSON.parse(
+                  line,
+                ) as AuditEntry,
+            );
+
+       const summary: AuditSummary = {
+                  totalEvents:
+                    entries.length,
+
+                  successfulUploads:
+                    entries.filter(
+                      (auditEntry) =>
+                        auditEntry.action ===
+                        'UPLOAD',
+                    ).length,
+
+                  alreadyExists:
+                    entries.filter(
+                      (auditEntry) =>
+                        auditEntry.action ===
+                        'SKIP_ALREADY_EXISTS',
+                    ).length,
+
+                  duplicateBlocked:
+                    entries.filter(
+                      (auditEntry) =>
+                        auditEntry.action ===
+                        'BLOCK_DUPLICATE',
+                    ).length,
+
+                  missingFromVault:
+                    entries.filter(
+                      (auditEntry) =>
+                        auditEntry.action ===
+                        'BLOCK_MISSING_FROM_VAULT',
+                    ).length,
+
+                  localFileChanged:
+                    entries.filter(
+                      (auditEntry) =>
+                        auditEntry.action ===
+                        'BLOCK_LOCAL_FILE_CHANGED',
+                    ).length,
+
+                  uploadFailures:
+                    entries.filter(
+                      (auditEntry) =>
+                        auditEntry.action ===
+                        'UPLOAD_FAILED',
+                    ).length,
+
+                  unknownResults:
+                    entries.filter(
+                      (auditEntry) =>
+                        auditEntry.action ===
+                        'UPLOAD_UNKNOWN',
+                    ).length,
+                };
+
+        await saveAuditSummary(
+          summary,
+        );
+      }
+//===============
+      // -----------------------------------------
+      // Monitor health check
+      // -----------------------------------------
+
+      async function checkMonitorHealth(
+        state: UploadState,
+        summary: UploadSummary,
+        currentVaultDocumentCount: number,
+      ): Promise<boolean> {
+        // -----------------------------------------
+        // Calculate current local state counts
+        // -----------------------------------------
+
+        const stateEntries =
+          Object.values(state);
+
+        const uploadedStateCount =
+            stateEntries.filter(
+              (fileState) =>
+                fileState.status ===
+                  'UPLOADED' ||
+                (
+                  fileState.status ===
+                    'LOCAL_FILE_MISSING' &&
+                  fileState.previousStatusBeforeLocalMissing ===
+                    'UPLOADED'
+                ),
+            ).length;
+
+        const alreadyExistsStateCount =
+              stateEntries.filter(
+                (fileState) =>
+                  fileState.status ===
+                    'ALREADY_EXISTS' ||
+                  (
+                    fileState.status ===
+                      'LOCAL_FILE_MISSING' &&
+                    fileState.previousStatusBeforeLocalMissing ===
+                      'ALREADY_EXISTS'
+                  ),
+              ).length;
+
+        const failedStateCount =
+          stateEntries.filter(
+            (fileState) =>
+              fileState.status ===
+              'FAILED',
+          ).length;
+
+        const detectedStateCount =
+          stateEntries.filter(
+            (fileState) =>
+              fileState.status ===
+              'DETECTED',
+          ).length;
+
+        const uploadingStateCount =
+          stateEntries.filter(
+            (fileState) =>
+              fileState.status ===
+              'UPLOADING',
+          ).length;
+
+        const unknownStateCount =
+          stateEntries.filter(
+            (fileState) =>
+              fileState.status ===
+              'UPLOAD_UNKNOWN',
+          ).length;
+
+        const missingStateCount =
+          stateEntries.filter(
+            (fileState) =>
+              fileState.status ===
+              'MISSING_FROM_VAULT',
+          ).length;
+
+        const duplicateStateCount =
+            stateEntries.filter(
+              (fileState) =>
+                fileState.status ===
+                'DUPLICATE_DETECTED',
+            ).length;
+
+
+        // -----------------------------------------
+        // Upload summary ↔ state
+        // -----------------------------------------
+
+        const uploadSummaryMatchesState =
+          summary.totalUploaded ===
+            uploadedStateCount &&
+          summary.totalAlreadyExists ===
+            alreadyExistsStateCount &&
+          summary.totalFailed ===
+            failedStateCount;
+
+        // -----------------------------------------
+        // Read audit summary
+        // -----------------------------------------
+
+        const auditSummary =
+          await loadAuditSummary();
+
+        // -----------------------------------------
+        // Read audit JSONL
+        // -----------------------------------------
+
+        let auditEntries: AuditEntry[] = [];
+
+        try {
+          const rawAudit =
+            await fs.readFile(
+              AUDIT_FILE,
+              'utf8',
+            );
+
+          auditEntries =
+            rawAudit
+              .split(/\r?\n/)
+              .map(
+                (line) =>
+                  line.trim(),
+              )
+              .filter(
+                (line) =>
+                  line.length > 0,
+              )
+              .map(
+                (line) =>
+                  JSON.parse(
+                    line,
+                  ) as AuditEntry,
+              );
+        } catch {
+          auditEntries = [];
+        }
+
+        // -----------------------------------------
+        // Audit summary ↔ audit log
+        // -----------------------------------------
+
+        const auditSummaryMatchesAuditLog =
+            auditSummary.totalEvents ===
+              auditEntries.length &&
+            auditSummary.successfulUploads ===
+              auditEntries.filter(
+                (entry) =>
+                  entry.action ===
+                  'UPLOAD',
+              ).length &&
+            auditSummary.alreadyExists ===
+              auditEntries.filter(
+                (entry) =>
+                  entry.action ===
+                  'SKIP_ALREADY_EXISTS',
+              ).length &&
+            auditSummary.duplicateBlocked ===
+              auditEntries.filter(
+                (entry) =>
+                  entry.action ===
+                  'BLOCK_DUPLICATE',
+              ).length &&
+            auditSummary.missingFromVault ===
+              auditEntries.filter(
+                (entry) =>
+                  entry.action ===
+                  'BLOCK_MISSING_FROM_VAULT',
+              ).length &&
+            auditSummary.uploadFailures ===
+              auditEntries.filter(
+                (entry) =>
+                  entry.action ===
+                  'UPLOAD_FAILED',
+              ).length &&
+            auditSummary.unknownResults ===
+              auditEntries.filter(
+                (entry) =>
+                  entry.action ===
+                  'UPLOAD_UNKNOWN',
+              ).length;
+
+        // -----------------------------------------
+        // Check for unresolved problem states
+        // -----------------------------------------
+
+        const localFileMissingStateCount =
+              stateEntries.filter(
+                (fileState) =>
+                  fileState.status ===
+                  'LOCAL_FILE_MISSING',
+              ).length;
+
+            const localFileChangedStateCount =
+              stateEntries.filter(
+                (fileState) =>
+                  fileState.status ===
+                  'LOCAL_FILE_CHANGED',
+              ).length;
+
+            // -----------------------------------------
+            // LOCAL STATE HEALTH DETAILS
+            // -----------------------------------------
+
+            console.log(
+              '----------------------------------------',
+            );
+
+            console.log(
+              'LOCAL STATE',
+            );
+
+            console.log(
+              '----------------------------------------',
+            );
+
+            console.log(
+              `Tracked documents: ${
+                stateEntries.length
+              }`,
+            );
+
+            console.log(
+              `UPLOADED: ${
+                uploadedStateCount
+              }`,
+            );
+
+            console.log(
+              `ALREADY_EXISTS: ${
+                alreadyExistsStateCount
+              }`,
+            );
+
+            console.log(
+              `DETECTED: ${
+                detectedStateCount
+              }`,
+            );
+
+            console.log(
+              `UPLOADING: ${
+                uploadingStateCount
+              }`,
+            );
+
+            console.log(
+              `FAILED: ${
+                failedStateCount
+              }`,
+            );
+
+            console.log(
+              `UPLOAD_UNKNOWN: ${
+                unknownStateCount
+              }`,
+            );
+
+            console.log(
+              `MISSING_FROM_VAULT: ${
+                missingStateCount
+              }`,
+            );
+
+            console.log(
+              `DUPLICATE_DETECTED: ${
+                duplicateStateCount
+              }`,
+            );
+
+            console.log(
+              `LOCAL_FILE_MISSING: ${
+                localFileMissingStateCount
+              }`,
+            );
+
+            console.log(
+              `LOCAL_FILE_CHANGED: ${
+                localFileChangedStateCount
+              }`,
+            );
+
+            console.log(
+              '----------------------------------------',
+            );
+
+
+
+         const noProblemStates =
+          detectedStateCount === 0 &&
+          uploadingStateCount === 0 &&
+          unknownStateCount === 0 &&
+          missingStateCount === 0 &&
+          duplicateStateCount === 0 &&
+          localFileMissingStateCount === 0 &&
+          localFileChangedStateCount === 0;
+
+
+
+        // -----------------------------------------
+        // Local state ↔ Family Vault
+        // -----------------------------------------
+
+        const trackedDocumentsMatchVault =
+          stateEntries.length ===
+          currentVaultDocumentCount;
+
+        // -----------------------------------------
+        // Overall health
+        // -----------------------------------------
+
+        const overallHealth =
+          uploadSummaryMatchesState &&
+          auditSummaryMatchesAuditLog &&
+          noProblemStates &&
+          trackedDocumentsMatchVault;
+
+          // -----------------------------------------
+          // Persist monitor health history
+          // -----------------------------------------
+
+          const healthEntry = {
+            timestamp:
+              new Date().toISOString(),
+
+            vaultDocumentCount:
+              currentVaultDocumentCount,
+
+            trackedDocuments:
+              stateEntries.length,
+
+            stateConsistency:
+              uploadSummaryMatchesState
+                ? 'PASS'
+                : 'FAIL',
+
+            auditConsistency:
+              auditSummaryMatchesAuditLog
+                ? 'PASS'
+                : 'FAIL',
+
+            problemStates:
+              noProblemStates
+                ? 'PASS'
+                : 'FAIL',
+
+            vaultConsistency:
+              trackedDocumentsMatchVault
+                ? 'PASS'
+                : 'FAIL',
+
+            overallHealth:
+              overallHealth
+                ? 'PASS'
+                : 'FAIL',
+          };
+
+          await fs.mkdir(
+            STATUS_DIRECTORY,
+            {
+              recursive: true,
+            },
+          );
+
+          await fs.appendFile(
+            MONITOR_HEALTH_FILE,
+            `${JSON.stringify(healthEntry)}\n`,
+            'utf8',
+          );
+
+        // -----------------------------------------
+        // Display health report
+        // -----------------------------------------
+
+        console.log(
+          '----------------------------------------',
+        );
+
+        console.log(
+          'MONITOR HEALTH',
+        );
+
+        console.log(
+          '----------------------------------------',
+        );
+
+        console.log(
+          `State consistency: ${
+            uploadSummaryMatchesState
+              ? 'PASS'
+              : 'FAIL'
+          }`,
+        );
+
+        console.log(
+          `Audit consistency: ${
+            auditSummaryMatchesAuditLog
+              ? 'PASS'
+              : 'FAIL'
+          }`,
+        );
+
+        console.log(
+          `Problem states: ${
+            noProblemStates
+              ? 'PASS'
+              : 'FAIL'
+          }`,
+        );
+
+        console.log(
+          `Vault consistency: ${
+            trackedDocumentsMatchVault
+              ? 'PASS'
+              : 'FAIL'
+          }`,
+        );
+
+        console.log(
+          '----------------------------------------',
+        );
+
+        console.log(
+          `OVERALL HEALTH: ${
+            overallHealth
+              ? 'PASS'
+              : 'FAIL'
+          }`,
+        );
+
+        console.log(
+          '----------------------------------------',
+        );
+
+        return overallHealth;
+      }
+//===============
 
 async function getToUploadFiles(): Promise<
   string[]
@@ -271,6 +914,77 @@ async function inspectToUpload(
 
   const newFiles: string[] = [];
   const changedFiles: string[] = [];
+
+      // -----------------------------------------
+      // Detect files removed from ToUpload
+      // -----------------------------------------
+      //
+      // IMPORTANT:
+      // This only changes LOCAL monitor state.
+      // It NEVER deletes or modifies Family Vault.
+      //
+
+      const currentFileNameSet =
+        new Set(fileNames);
+
+      for (
+        const [
+          trackedFileName,
+          trackedFileState,
+        ] of Object.entries(state)
+      ) {
+        if (
+          currentFileNameSet.has(
+            trackedFileName,
+          )
+        ) {
+          continue;
+        }
+
+        // Already recorded as locally missing.
+        if (
+          trackedFileState.status ===
+          'LOCAL_FILE_MISSING'
+        ) {
+          continue;
+        }
+
+        // -----------------------------------------
+        // Mark local file as missing
+        // -----------------------------------------
+
+        state[trackedFileName] = {
+            ...trackedFileState,
+            status:
+              'LOCAL_FILE_MISSING',
+            previousStatusBeforeLocalMissing:
+              trackedFileState.status,
+          };
+
+        console.log(
+          '----------------------------------------',
+        );
+
+        console.log(
+          `LOCAL FILE MISSING: ${trackedFileName}`,
+        );
+
+        console.log(
+          'Family Vault: NOT MODIFIED',
+        );
+
+        console.log(
+          'Action: LOCAL STATE ONLY',
+        );
+
+        console.log(
+          '----------------------------------------',
+        );
+      }
+
+      // -----------------------------------------
+      // Process files currently present
+      // -----------------------------------------
 
   for (const fileName of fileNames) {
     const filePath =
@@ -336,6 +1050,7 @@ async function inspectToUpload(
   };
 }
 
+//===============
 async function processDocument(
   fileName: string,
   state: UploadState,
@@ -384,7 +1099,10 @@ async function processDocument(
 
   if (existingCount === 1) {
 
+    // ---------------------------------------
     // Already uploaded by this watcher
+    // ---------------------------------------
+
     if (
       currentState.status ===
       'UPLOADED'
@@ -396,46 +1114,207 @@ async function processDocument(
       return;
     }
 
+    // ---------------------------------------
     // Already known as existing
+    // ---------------------------------------
+
     if (
       currentState.status ===
       'ALREADY_EXISTS'
     ) {
+      await appendAuditLog({
+        timestamp:
+          new Date().toISOString(),
+
+        fileName,
+
+        previousStatus:
+          currentState.status,
+
+        vaultMatchesBefore:
+          existingCount,
+
+        action:
+          'SKIP_ALREADY_EXISTS',
+
+        vaultMatchesAfter:
+          existingCount,
+
+        finalStatus:
+          'ALREADY_EXISTS',
+
+        message:
+          'Document already exists in Family Vault. Upload skipped.',
+      });
+
       console.log(
         `Document already exists in Vault: ${fileName}`,
       );
 
       return;
     }
+// ---------------------------------------
+// New/detected file but exactly ONE
+// document already exists in Family Vault
+// ---------------------------------------
+//
+// IMPORTANT:
+// If this file was previously uploaded and
+// the local content has now changed, do NOT
+// silently convert it to ALREADY_EXISTS.
+//
+// The Vault copy must be preserved.
+// Automatic overwrite/version upload is blocked.
+// ---------------------------------------
 
-    // New/detected file, but it already
-    // exists in Family Vault
+if (
+  currentState.status ===
+    'DETECTED' &&
+  currentState.previousStatusBeforeLocalMissing !==
+    'ALREADY_EXISTS'
+) {
+  // ---------------------------------------
+  // Local file changed after a previous
+  // upload, while the Vault still contains
+  // the original document.
+  // ---------------------------------------
+
+  const wasPreviouslyUploaded =
+    currentState.uploadedAt !==
+    undefined;
+
+  if (wasPreviouslyUploaded) {
     state[fileName] = {
       ...currentState,
-      status: 'ALREADY_EXISTS',
+      status:
+        'LOCAL_FILE_CHANGED',
     };
 
     await saveUploadState(
       state,
     );
 
-    summary.totalAlreadyExists =
-      Object.values(state).filter(
-        (fileState) =>
-          fileState.status ===
-          'ALREADY_EXISTS',
-      ).length;
+    // -------------------------------------
+    // Keep upload summary unchanged.
+    //
+    // This is NOT a new upload and NOT an
+    // ALREADY_EXISTS event.
+    // -------------------------------------
 
     await saveUploadSummary(
       summary,
     );
 
+    // -------------------------------------
+    // Audit blocked local-file change
+    // -------------------------------------
+
+    await appendAuditLog({
+      timestamp:
+        new Date().toISOString(),
+
+      fileName,
+
+      previousStatus:
+        currentState.status,
+
+      vaultMatchesBefore:
+        existingCount,
+
+      action:
+        'BLOCK_LOCAL_FILE_CHANGED',
+
+      vaultMatchesAfter:
+        existingCount,
+
+      finalStatus:
+        'LOCAL_FILE_CHANGED',
+
+      message:
+        'Local ToUpload file changed after previous upload. Family Vault document preserved. Automatic overwrite/version upload blocked.',
+    });
+
     console.log(
-      'Action: SKIP — matching document already exists',
+      'Action: BLOCKED — local file changed after previous upload',
+    );
+
+    console.log(
+      'Family Vault document preserved',
     );
 
     return;
   }
+}
+
+// -----------------------------------------
+// New/detected file + exactly one matching
+// Vault document.
+//
+// This is the existing ALREADY_EXISTS
+// behavior for files that were not previously
+// uploaded by this watcher.
+// -----------------------------------------
+
+      state[fileName] = {
+        ...currentState,
+        status:
+          'ALREADY_EXISTS',
+      };
+
+      await saveUploadState(
+        state,
+      );
+
+      // -----------------------------------------
+      // Refresh ALREADY_EXISTS count
+      // -----------------------------------------
+
+      summary.totalAlreadyExists =
+        Object.values(state).filter(
+          (fileState) =>
+            fileState.status ===
+            'ALREADY_EXISTS',
+        ).length;
+
+      await saveUploadSummary(
+        summary,
+      );
+
+      // -----------------------------------------
+      // Audit existing Vault document
+      // -----------------------------------------
+
+      await appendAuditLog({
+        timestamp:
+          new Date().toISOString(),
+
+        fileName,
+
+        previousStatus:
+          currentState.status,
+
+        vaultMatchesBefore:
+          existingCount,
+
+        action:
+          'SKIP_ALREADY_EXISTS',
+
+        vaultMatchesAfter:
+          existingCount,
+
+        finalStatus:
+          'ALREADY_EXISTS',
+
+        message:
+          'Document already exists in Family Vault. Upload skipped.',
+      });
+
+      console.log(
+        'Action: SKIP — matching document already exists',
+      );
+
+      return;
+        }
 
   // -----------------------------------------
   // MORE THAN ONE copy exists
@@ -451,6 +1330,35 @@ async function processDocument(
       state,
     );
 
+    // ---------------------------------------
+    // Audit duplicate detection
+    // ---------------------------------------
+
+    await appendAuditLog({
+      timestamp:
+        new Date().toISOString(),
+
+      fileName,
+
+      previousStatus:
+        currentState.status,
+
+      vaultMatchesBefore:
+        existingCount,
+
+      action:
+        'BLOCK_DUPLICATE',
+
+      vaultMatchesAfter:
+        existingCount,
+
+      finalStatus:
+        'DUPLICATE_DETECTED',
+
+      message:
+        'Multiple matching Vault documents detected. Automatic upload blocked.',
+    });
+
     console.log(
       'Action: BLOCKED — duplicate documents detected',
     );
@@ -462,8 +1370,8 @@ async function processDocument(
   // ZERO copies exist
   // -----------------------------------------
 
-  // Previously uploaded/existing document
-  // has disappeared from Vault.
+  // Previously uploaded/known document
+  // is now missing from Family Vault.
   if (
     currentState.status ===
       'UPLOADED' ||
@@ -479,6 +1387,35 @@ async function processDocument(
       state,
     );
 
+    // ---------------------------------------
+    // Audit missing Vault document
+    // ---------------------------------------
+
+    await appendAuditLog({
+      timestamp:
+        new Date().toISOString(),
+
+      fileName,
+
+      previousStatus:
+        currentState.status,
+
+      vaultMatchesBefore:
+        existingCount,
+
+      action:
+        'BLOCK_MISSING_FROM_VAULT',
+
+      vaultMatchesAfter:
+        existingCount,
+
+      finalStatus:
+        'MISSING_FROM_VAULT',
+
+      message:
+        'Previously uploaded/known document is missing from Family Vault. Automatic re-upload blocked.',
+    });
+
     console.log(
       'Action: BLOCKED — previously uploaded document is missing',
     );
@@ -487,7 +1424,7 @@ async function processDocument(
   }
 
   // -----------------------------------------
-  // New document → upload
+  // New document + Vault has zero matches
   // -----------------------------------------
 
   state[fileName] = {
@@ -526,6 +1463,32 @@ async function processDocument(
     await saveUploadSummary(
       summary,
     );
+
+    // ---------------------------------------
+    // Audit failed upload
+    // ---------------------------------------
+
+    await appendAuditLog({
+      timestamp:
+        new Date().toISOString(),
+
+      fileName,
+
+      previousStatus:
+        currentState.status,
+
+      vaultMatchesBefore:
+        existingCount,
+
+      action:
+        'UPLOAD_FAILED',
+
+      finalStatus:
+        'FAILED',
+
+      message:
+        'Upload request failed before successful Vault reconciliation.',
+    });
 
     console.error(
       'Upload request: FAILED',
@@ -576,6 +1539,35 @@ async function processDocument(
       summary,
     );
 
+    // ---------------------------------------
+    // Audit successful upload
+    // ---------------------------------------
+
+    await appendAuditLog({
+      timestamp:
+        uploadedAt,
+
+      fileName,
+
+      previousStatus:
+        currentState.status,
+
+      vaultMatchesBefore:
+        existingCount,
+
+      action:
+        'UPLOAD',
+
+      vaultMatchesAfter:
+        postUploadCount,
+
+      finalStatus:
+        'UPLOADED',
+
+      message:
+        'Document uploaded successfully and exactly one Vault copy was confirmed.',
+    });
+
     console.log(
       'Final status: UPLOADED',
     );
@@ -597,6 +1589,35 @@ async function processDocument(
       state,
     );
 
+    // ---------------------------------------
+    // Audit duplicate after upload
+    // ---------------------------------------
+
+    await appendAuditLog({
+      timestamp:
+        new Date().toISOString(),
+
+      fileName,
+
+      previousStatus:
+        currentState.status,
+
+      vaultMatchesBefore:
+        existingCount,
+
+      action:
+        'BLOCK_DUPLICATE',
+
+      vaultMatchesAfter:
+        postUploadCount,
+
+      finalStatus:
+        'DUPLICATE_DETECTED',
+
+      message:
+        'Multiple Vault copies were detected after upload.',
+    });
+
     console.error(
       'Final status: DUPLICATE_DETECTED',
     );
@@ -605,7 +1626,7 @@ async function processDocument(
   }
 
   // -----------------------------------------
-  // Cannot reconcile upload
+  // Upload result cannot be reconciled
   // -----------------------------------------
 
   state[fileName] = {
@@ -616,6 +1637,35 @@ async function processDocument(
   await saveUploadState(
     state,
   );
+
+  // -----------------------------------------
+  // Audit unknown upload result
+  // -----------------------------------------
+
+  await appendAuditLog({
+    timestamp:
+      new Date().toISOString(),
+
+    fileName,
+
+    previousStatus:
+      currentState.status,
+
+    vaultMatchesBefore:
+      existingCount,
+
+    action:
+      'UPLOAD_UNKNOWN',
+
+    vaultMatchesAfter:
+      postUploadCount,
+
+    finalStatus:
+      'UPLOAD_UNKNOWN',
+
+    message:
+      'Upload request completed, but the final Family Vault state could not be reconciled.',
+  });
 
   console.error(
     'Final status: UPLOAD_UNKNOWN',
@@ -769,41 +1819,58 @@ console.log(
 console.log(
   '----------------------------------------',
 );
-
+//=========
 // -----------------------------------------
 // Process documents only when required
 // -----------------------------------------
 
-if (
-  filesToProcess.length > 0
-) {
-  for (
-    const fileName of filesToProcess
-  ) {
-    await processDocument(
-      fileName,
-      state,
-      summary,
-      vaultPage,
-    );
-  }
-}
+      if (
+        filesToProcess.length > 0
+      ) {
+        for (
+          const fileName of filesToProcess
+        ) {
+          await processDocument(
+            fileName,
+            state,
+            summary,
+            vaultPage,
+          );
+        }
+      }
 
-// -----------------------------------------
-// Upload summary
-// -----------------------------------------
+      // -----------------------------------------
+      // Refresh Vault count after processing
+      // -----------------------------------------
 
-console.log(
-  '----------------------------------------',
-);
+      const finalVaultDocumentCount =
+        await vaultPage.getDocumentCount();
 
-console.log(
-  'UPLOAD SUMMARY',
-);
+      // -----------------------------------------
+      // Monitor health check
+      // -----------------------------------------
 
-console.log(
-  '----------------------------------------',
-);
+      await checkMonitorHealth(
+        state,
+        summary,
+        finalVaultDocumentCount,
+      );
+
+      // -----------------------------------------
+      // Upload summary
+      // -----------------------------------------
+
+      console.log(
+        '----------------------------------------',
+      );
+
+      console.log(
+        'UPLOAD SUMMARY',
+      );
+
+      console.log(
+        '----------------------------------------',
+      );
 
 console.log(
   `Successfully uploaded by Monitor: ${
@@ -893,11 +1960,44 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  console.error('========================================');
-  console.error('TOUPLOAD WATCHER: FAILED');
-  console.error(error);
-  console.error('========================================');
+if (
+  process.argv.includes(
+    '--once',
+  )
+) {
+  runWatcherCycle().catch((error) => {
+    console.error(
+      '========================================',
+    );
 
-  process.exitCode = 1;
-});
+    console.error(
+      'TOUPLOAD WATCHER: FAILED',
+    );
+
+    console.error(error);
+
+    console.error(
+      '========================================',
+    );
+
+    process.exitCode = 1;
+  });
+} else {
+  main().catch((error) => {
+    console.error(
+      '========================================',
+    );
+
+    console.error(
+      'TOUPLOAD WATCHER: FAILED',
+    );
+
+    console.error(error);
+
+    console.error(
+      '========================================',
+    );
+
+    process.exitCode = 1;
+  });
+}
