@@ -3,19 +3,34 @@ import { LoginPage } from '../pages/LoginPage';
 import { VaultPage } from '../pages/VaultPage';
 import { testConfig } from '../config/test-config';
 
-test('Cleanup accidental Passport duplicate documents', async ({
+test('Cleanup accidental Passport duplicate documents safely', async ({
   page,
 }) => {
   const loginPage = new LoginPage(page);
   const vaultPage = new VaultPage(page);
 
-  const testFileName = 'Passport (front).pdf';
+  const testFileName =
+    'Passport (front).pdf';
 
-  console.log('========================================');
-  console.log('PASSPORT DUPLICATE CLEANUP');
-  console.log('========================================');
-  console.log(`Target document: ${testFileName}`);
-  console.log('----------------------------------------');
+  console.log(
+    '========================================',
+  );
+
+  console.log(
+    'PASSPORT DUPLICATE CLEANUP',
+  );
+
+  console.log(
+    '========================================',
+  );
+
+  console.log(
+    `Target document: ${testFileName}`,
+  );
+
+  console.log(
+    '----------------------------------------',
+  );
 
   // -----------------------------------------
   // Step 1: Login
@@ -28,7 +43,9 @@ test('Cleanup accidental Passport duplicate documents', async ({
     testConfig.testPassword,
   );
 
-  console.log('Login: PASS');
+  console.log(
+    'Login: PASS',
+  );
 
   // -----------------------------------------
   // Step 2: Verify Vault
@@ -36,7 +53,9 @@ test('Cleanup accidental Passport duplicate documents', async ({
 
   await vaultPage.verifyVaultLoaded();
 
-  console.log('Vault: PASS');
+  console.log(
+    'Vault: PASS',
+  );
 
   // -----------------------------------------
   // Step 3: Wait for Vault document data
@@ -49,7 +68,6 @@ test('Cleanup accidental Passport duplicate documents', async ({
     timeout: 15000,
   });
 
-  // Allow the Vault's document data to finish rendering.
   await page.waitForTimeout(1000);
 
   // -----------------------------------------
@@ -82,27 +100,134 @@ test('Cleanup accidental Passport duplicate documents', async ({
     `Passport documents before cleanup: ${beforeCount}`,
   );
 
-  expect(
-    beforeCount,
-    `Expected Passport documents before cleanup, but found ${beforeCount}`,
-  ).toBeGreaterThan(0);
+  // -----------------------------------------
+  // Step 6: Safe duplicate decision
+  // -----------------------------------------
+
+  // No Passport document exists.
+  // Nothing should be deleted.
+  if (beforeCount === 0) {
+    console.log(
+      'Passport document not currently in Vault — cleanup skipped.',
+    );
+
+    console.log(
+      'No Passport document deleted: PASS',
+    );
+
+    console.log(
+      'Vault baseline preserved: PASS',
+    );
+
+    const finalVaultCount =
+      await vaultPage.getDocumentCount();
+
+    expect(
+      finalVaultCount,
+      'Vault document count changed unexpectedly when no Passport existed',
+    ).toBe(
+      initialVaultCount,
+    );
+
+    console.log(
+      `Vault count: ${initialVaultCount} → ${finalVaultCount} — PASS`,
+    );
+
+    console.log(
+      '----------------------------------------',
+    );
+
+    console.log(
+      'PASSPORT DUPLICATE CLEANUP: NOT REQUIRED',
+    );
+
+    console.log(
+      'CLEANUP STATUS: HEALTHY',
+    );
+
+    console.log(
+      '========================================',
+    );
+
+    return;
+  }
+
+  // Exactly one Passport document exists.
+  // Preserve it because this test is for duplicates.
+  if (beforeCount === 1) {
+    console.log(
+      'Exactly one Passport document exists.',
+    );
+
+    console.log(
+      'Legitimate Passport copy preserved: PASS',
+    );
+
+    const finalVaultCount =
+      await vaultPage.getDocumentCount();
+
+    expect(
+      finalVaultCount,
+      'Vault document count changed while preserving the only Passport copy',
+    ).toBe(
+      initialVaultCount,
+    );
+
+    console.log(
+      `Vault count: ${initialVaultCount} → ${finalVaultCount} — PASS`,
+    );
+
+    console.log(
+      '----------------------------------------',
+    );
+
+    console.log(
+      'NO PASSPORT DUPLICATES DETECTED',
+    );
+
+    console.log(
+      'CLEANUP STATUS: HEALTHY',
+    );
+
+    console.log(
+      '========================================',
+    );
+
+    return;
+  }
 
   // -----------------------------------------
-  // Step 6: Delete only Passport documents
+  // Step 7: Duplicates exist
   // -----------------------------------------
+
+  console.log(
+    `Duplicate condition detected: ${beforeCount} Passport copies`,
+  );
+
+  console.log(
+    'One Passport copy will be preserved.',
+  );
+
+  const duplicatesToDelete =
+    beforeCount - 1;
 
   let deletedCount = 0;
 
-  while (true) {
+  // -----------------------------------------
+  // Step 8: Delete only duplicate copies
+  // -----------------------------------------
+
+  while (deletedCount < duplicatesToDelete) {
     const currentCount =
       await passportDocument.count();
 
-    if (currentCount === 0) {
+    // Never delete the final Passport copy.
+    if (currentCount <= 1) {
       break;
     }
 
     console.log(
-      `Deleting Passport document ${deletedCount + 1}...`,
+      `Deleting Passport duplicate ${deletedCount + 1} of ${duplicatesToDelete}...`,
     );
 
     await vaultPage.deleteTestDocument(
@@ -112,22 +237,21 @@ test('Cleanup accidental Passport duplicate documents', async ({
     deletedCount++;
 
     console.log(
-      `Deleted Passport document ${deletedCount}: PASS`,
+      `Deleted Passport duplicate ${deletedCount}: PASS`,
     );
 
     // Safety limit.
     if (deletedCount >= 10) {
       throw new Error(
-        'Safety limit reached while deleting Passport documents.',
+        'Safety limit reached while deleting Passport duplicates.',
       );
     }
 
-    // Give the Vault time to update its document list.
     await page.waitForTimeout(1000);
   }
 
   // -----------------------------------------
-  // Step 7: Verify Passport copies removed
+  // Step 9: Verify exactly one remains
   // -----------------------------------------
 
   const afterCount =
@@ -139,12 +263,11 @@ test('Cleanup accidental Passport duplicate documents', async ({
 
   expect(
     afterCount,
-    'Passport documents still remain in Vault',
-  ).toBe(0);
+    'Passport cleanup must preserve exactly one document',
+  ).toBe(1);
 
   // -----------------------------------------
-  // Step 8: Verify only targeted documents
-  // were removed
+  // Step 10: Verify only duplicates removed
   // -----------------------------------------
 
   const finalVaultCount =
@@ -164,18 +287,25 @@ test('Cleanup accidental Passport duplicate documents', async ({
 
   expect(
     finalVaultCount,
-    'Unexpected Vault document count after Passport cleanup',
+    'Unexpected Vault document count after Passport duplicate cleanup',
   ).toBe(
     expectedFinalVaultCount,
   );
 
   // -----------------------------------------
-  // Step 9: Final cleanup verification
+  // Step 11: Final cleanup verification
   // -----------------------------------------
 
-  console.log('----------------------------------------');
   console.log(
-    `Passport duplicate cleanup: ${deletedCount} deleted`,
+    '----------------------------------------',
+  );
+
+  console.log(
+    `Passport duplicates deleted: ${deletedCount}`,
+  );
+
+  console.log(
+    'Exactly one Passport document preserved: PASS',
   );
 
   console.log(
@@ -194,5 +324,7 @@ test('Cleanup accidental Passport duplicate documents', async ({
     'CLEANUP STATUS: HEALTHY',
   );
 
-  console.log('========================================');
+  console.log(
+    '========================================',
+  );
 });
