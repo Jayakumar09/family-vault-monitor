@@ -53,7 +53,18 @@ test('Cleanup accidental Passport duplicate documents', async ({
   await page.waitForTimeout(1000);
 
   // -----------------------------------------
-  // Step 4: Count Passport documents
+  // Step 4: Capture Vault baseline
+  // -----------------------------------------
+
+  const initialVaultCount =
+    await vaultPage.getDocumentCount();
+
+  console.log(
+    `Total Vault documents before cleanup: ${initialVaultCount}`,
+  );
+
+  // -----------------------------------------
+  // Step 5: Count Passport documents
   // -----------------------------------------
 
   const passportDocument =
@@ -77,7 +88,7 @@ test('Cleanup accidental Passport duplicate documents', async ({
   ).toBeGreaterThan(0);
 
   // -----------------------------------------
-  // Step 5: Delete only Passport documents
+  // Step 6: Delete only Passport documents
   // -----------------------------------------
 
   let deletedCount = 0;
@@ -116,7 +127,7 @@ test('Cleanup accidental Passport duplicate documents', async ({
   }
 
   // -----------------------------------------
-  // Step 6: Verify Passport copies removed
+  // Step 7: Verify Passport copies removed
   // -----------------------------------------
 
   const afterCount =
@@ -132,30 +143,56 @@ test('Cleanup accidental Passport duplicate documents', async ({
   ).toBe(0);
 
   // -----------------------------------------
-  // Step 7: Verify total Vault count
+  // Step 8: Verify only targeted documents
+  // were removed
   // -----------------------------------------
 
   const finalVaultCount =
     await vaultPage.getDocumentCount();
 
+  const expectedFinalVaultCount =
+    initialVaultCount -
+    deletedCount;
+
   console.log(
     `Total Vault documents after cleanup: ${finalVaultCount}`,
   );
 
+  console.log(
+    `Expected Vault documents after cleanup: ${expectedFinalVaultCount}`,
+  );
+
   expect(
     finalVaultCount,
-    'Vault should return to zero documents after cleanup',
-  ).toBe(0);
+    'Unexpected Vault document count after Passport cleanup',
+  ).toBe(
+    expectedFinalVaultCount,
+  );
+
+  // -----------------------------------------
+  // Step 9: Final cleanup verification
+  // -----------------------------------------
 
   console.log('----------------------------------------');
   console.log(
     `Passport duplicate cleanup: ${deletedCount} deleted`,
   );
+
   console.log(
-    'Vault baseline: 0 documents',
+    `Vault baseline: ${initialVaultCount} documents`,
   );
+
+  console.log(
+    `Vault final count: ${finalVaultCount} documents`,
+  );
+
+  console.log(
+    'Unrelated Vault documents preserved: PASS',
+  );
+
   console.log(
     'CLEANUP STATUS: HEALTHY',
   );
+
   console.log('========================================');
 });
