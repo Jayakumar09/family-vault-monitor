@@ -106,7 +106,7 @@ test(
         'toupload-state.json',
       );
 
-        const auditFilePath =
+    const auditFilePath =
       path.join(
         uploadStatusDirectory,
         'upload-audit.jsonl',
@@ -133,18 +133,53 @@ test(
         undefined;
     }
 
+           let originalAuditSummaryContents:
+      | string
+      | undefined;
+
+    try {
+      originalAuditSummaryContents =
+        await fs.readFile(
+          auditSummaryFilePath,
+          'utf8',
+        );
+    } catch {
+      originalAuditSummaryContents =
+        undefined;
+    }
+
+    const summaryFilePath =
+      path.join(
+        uploadStatusDirectory,
+        'upload-summary.json',
+      );
+
+    let originalSummaryContents:
+      | string
+      | undefined;
+
+    try {
+      originalSummaryContents =
+        await fs.readFile(
+          summaryFilePath,
+          'utf8',
+        );
+    } catch {
+      originalSummaryContents =
+        undefined;
+    }
 
     console.log(
-      '========================================',
-    );
+  '========================================',
+);
 
-    console.log(
-      `Document: ${testFileName}`,
-    );
+console.log(
+  `Document: ${testFileName}`,
+);
 
-    console.log(
-      '----------------------------------------',
-    );
+console.log(
+  '----------------------------------------',
+);
 
     try {
       // -----------------------------------------
@@ -646,228 +681,65 @@ test(
         );
       }
 
-            // -----------------------------------------
-            // Rebuild upload audit summary after test cleanup
-            // -----------------------------------------
-
-            try {
-              const restoredAuditRaw =
-                await fs.readFile(
-                  auditFilePath,
-                  'utf8',
-                );
-
-              const restoredAuditEntries =
-                restoredAuditRaw
-                  .split(/\r?\n/)
-                  .map(
-                    (line) =>
-                      line.trim(),
-                  )
-                  .filter(
-                    (line) =>
-                      line.length > 0,
-                  )
-                  .map(
-                    (line) =>
-                      JSON.parse(
-                        line,
-                      ) as AuditEntry,
-                  );
-
-              const rebuiltAuditSummary = {
-                  totalEvents:
-                    restoredAuditEntries.length,
-
-                  successfulUploads:
-                    restoredAuditEntries.filter(
-                      (entry) =>
-                        entry.action ===
-                        'UPLOAD',
-                    ).length,
-
-                alreadyExists:
-                  restoredAuditEntries.filter(
-                    (entry) =>
-                      entry.action ===
-                      'SKIP_ALREADY_EXISTS',
-                  ).length,
-
-                duplicateBlocked:
-                  restoredAuditEntries.filter(
-                    (entry) =>
-                      entry.action ===
-                      'BLOCK_DUPLICATE',
-                  ).length,
-
-                missingFromVault:
-                  restoredAuditEntries.filter(
-                    (entry) =>
-                      entry.action ===
-                      'BLOCK_MISSING_FROM_VAULT',
-                  ).length,
-
-                localFileChanged:
-                  restoredAuditEntries.filter(
-                    (entry) =>
-                      entry.action ===
-                      'BLOCK_LOCAL_FILE_CHANGED',
-                  ).length,
-
-                uploadFailures:
-                  restoredAuditEntries.filter(
-                    (entry) =>
-                      entry.action ===
-                      'UPLOAD_FAILED',
-                  ).length,
-
-                unknownResults:
-                  restoredAuditEntries.filter(
-                    (entry) =>
-                      entry.action ===
-                      'UPLOAD_UNKNOWN',
-                  ).length,
-              };
-
-              await fs.writeFile(
-                auditSummaryFilePath,
-                JSON.stringify(
-                  rebuiltAuditSummary,
-                  null,
-                  2,
-                ),
-                'utf8',
-              );
-
-              console.log(
-                'Upload audit summary cleanup: PASS',
-              );
-            } catch (cleanupError) {
-              console.error(
-                'Upload audit summary cleanup failed:',
-                cleanupError,
-              );
-            }
-
       // -----------------------------------------
-      // Rebuild upload summary after test cleanup
+      // Restore upload audit summary exactly as it was
+      // before the test
       // -----------------------------------------
 
       try {
-        const summaryFilePath =
-          path.resolve(
-            process.cwd(),
-            'UploadStatus',
-            'upload-summary.json',
-          );
-
-        const summaryRaw =
-          await fs.readFile(
-            summaryFilePath,
-            'utf8',
-          );
-
-        const uploadSummary =
-          JSON.parse(
-            summaryRaw,
-          ) as {
-            totalUploaded: number;
-            totalAlreadyExists: number;
-            totalFailed: number;
-            lastUpload?: {
-              fileName: string;
-              uploadedAt: string;
-            };
-          };
-
-        const remainingRawState =
-          await fs.readFile(
-            statusFilePath,
-            'utf8',
-          );
-
-        const remainingUploadState =
-          JSON.parse(
-            remainingRawState,
-          ) as UploadState;
-
-        const remainingUploadedEntries =
-          Object.entries(
-            remainingUploadState,
-          ).filter(
-            ([, fileState]) =>
-              fileState.status ===
-                'UPLOADED' &&
-              !!fileState.uploadedAt,
-          );
-
-        const remainingAlreadyExistsEntries =
-          Object.entries(
-            remainingUploadState,
-          ).filter(
-            ([, fileState]) =>
-              fileState.status ===
-              'ALREADY_EXISTS',
-          );
-
-        let lastUpload:
-          | {
-              fileName: string;
-              uploadedAt: string;
-            }
-          | undefined;
-
-        for (
-          const [
-            fileName,
-            fileState,
-          ] of remainingUploadedEntries
+        if (
+          originalAuditSummaryContents !==
+          undefined
         ) {
-          if (
-            !fileState.uploadedAt
-          ) {
-            continue;
-          }
-
-          if (
-            !lastUpload ||
-            fileState.uploadedAt >
-              lastUpload.uploadedAt
-          ) {
-            lastUpload = {
-              fileName,
-              uploadedAt:
-                fileState.uploadedAt,
-            };
+          await fs.writeFile(
+            auditSummaryFilePath,
+            originalAuditSummaryContents,
+            'utf8',
+          );
+        } else {
+          try {
+            await fs.unlink(
+              auditSummaryFilePath,
+            );
+          } catch {
+            // File already absent.
           }
         }
 
-        const rebuiltSummary = {
-          totalUploaded:
-            remainingUploadedEntries.length,
-
-          totalAlreadyExists:
-            remainingAlreadyExistsEntries.length,
-
-          totalFailed:
-            uploadSummary.totalFailed,
-
-          ...(lastUpload
-            ? {
-                lastUpload,
-              }
-            : {}),
-        };
-
-        await fs.writeFile(
-          summaryFilePath,
-          JSON.stringify(
-            rebuiltSummary,
-            null,
-            2,
-          ),
-          'utf8',
+        console.log(
+          'Upload audit summary cleanup: PASS',
         );
+      } catch (cleanupError) {
+        console.error(
+          'Upload audit summary cleanup failed:',
+          cleanupError,
+        );
+      }
+
+      // -----------------------------------------
+      // Restore upload summary exactly as it was
+      // before the test
+      // -----------------------------------------
+
+      try {
+        if (
+          originalSummaryContents !==
+          undefined
+        ) {
+          await fs.writeFile(
+            summaryFilePath,
+            originalSummaryContents,
+            'utf8',
+          );
+        } else {
+          try {
+            await fs.unlink(
+              summaryFilePath,
+            );
+          } catch {
+            // File already absent.
+          }
+        }
 
         console.log(
           'Upload summary cleanup: PASS',
@@ -878,6 +750,8 @@ test(
           cleanupError,
         );
       }
+
+
 
       console.log(
         '========================================',
