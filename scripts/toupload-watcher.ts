@@ -39,6 +39,36 @@ type UploadSummary = {
     uploadedAt: string;
   };
 };
+
+function refreshUploadSummaryFromState(
+  state: UploadState,
+  summary: UploadSummary,
+): void {
+  const stateEntries =
+    Object.values(state);
+
+  summary.totalUploaded =
+    stateEntries.filter(
+      (fileState) =>
+        fileState.status ===
+        'UPLOADED',
+    ).length;
+
+  summary.totalAlreadyExists =
+    stateEntries.filter(
+      (fileState) =>
+        fileState.status ===
+        'ALREADY_EXISTS',
+    ).length;
+
+  summary.totalFailed =
+    stateEntries.filter(
+      (fileState) =>
+        fileState.status ===
+        'FAILED',
+    ).length;
+}
+
 type AuditAction =
   | 'UPLOAD'
   | 'SKIP_ALREADY_EXISTS'
@@ -1269,12 +1299,10 @@ if (
       // Refresh ALREADY_EXISTS count
       // -----------------------------------------
 
-      summary.totalAlreadyExists =
-        Object.values(state).filter(
-          (fileState) =>
-            fileState.status ===
-            'ALREADY_EXISTS',
-        ).length;
+      refreshUploadSummaryFromState(
+        state,
+        summary,
+      );
 
       await saveUploadSummary(
         summary,
@@ -1528,7 +1556,14 @@ if (
       state,
     );
 
-    summary.totalUploaded += 1;
+    // ---------------------------------------
+    // Refresh upload summary from current state
+    // ---------------------------------------
+
+    refreshUploadSummaryFromState(
+      state,
+      summary,
+    );
 
     summary.lastUpload = {
       fileName,
