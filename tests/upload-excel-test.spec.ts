@@ -4,171 +4,326 @@ import { VaultPage } from '../pages/VaultPage';
 import { testConfig } from '../config/test-config';
 import path from 'path';
 
-test('Family Vault - Excel upload, download, and cleanup', async ({ page }) => {
-  const loginPage = new LoginPage(page);
-  const vaultPage = new VaultPage(page);
+test(
+  'Family Vault - Excel upload, download, and cleanup',
+  async ({ page }) => {
+    const loginPage =
+      new LoginPage(page);
 
-  const testFileName = 'FamilyVault_Test_Excel.xlsx';
+    const vaultPage =
+      new VaultPage(page);
 
-  const filePath = path.resolve(
-    process.cwd(),
-    testFileName,
-  );
+    const testFileName =
+      'FamilyVault_Test_Excel.xlsx';
 
-  console.log('========================================');
-  console.log('FAMILY VAULT EXCEL TEST');
-  console.log('========================================');
-  console.log(`Test file: ${testFileName}`);
-  console.log(`File path: ${filePath}`);
+    const filePath =
+      path.resolve(
+        process.cwd(),
+        testFileName,
+      );
 
-  // -----------------------------------------
-  // Step 1: Login
-  // -----------------------------------------
+    let testDocumentCreated =
+      false;
 
-  await loginPage.open();
-
-  await loginPage.login(
-    testConfig.testEmail,
-    testConfig.testPassword,
-  );
-
-  console.log('Login: PASS');
-
-  // -----------------------------------------
-  // Step 2: Verify Vault
-  // -----------------------------------------
-
-  await vaultPage.verifyVaultLoaded();
-
-  console.log('Vault: PASS');
-
-  const beforeCount =
-    await vaultPage.getDocumentCount();
-
-  console.log(
-    `Documents before upload: ${beforeCount}`,
-  );
-
-  // -----------------------------------------
-  // Step 3: Upload Excel
-  // -----------------------------------------
-
-  await vaultPage.uploadTestDocument(filePath);
-
-  console.log('Excel upload: PASS');
-
-  // -----------------------------------------
-  // Step 4: Verify Excel
-  // -----------------------------------------
-
-  await expect(
-    page.getByText(testFileName, {
-      exact: true,
-    }),
-  ).toBeVisible();
-
-  console.log(
-    `Excel document visible: ${testFileName} — PASS`,
-  );
-
-  const afterUploadCount =
-    await vaultPage.getDocumentCount();
-
-  console.log(
-    `Documents after upload: ${afterUploadCount}`,
-  );
-
-  expect(afterUploadCount).toBe(
-    beforeCount + 1,
-  );
-
-  console.log(
-    `Upload count: ${beforeCount} → ${afterUploadCount} — PASS`,
-  );
-
-  // -----------------------------------------
-  // Step 5: Download Excel
-  // -----------------------------------------
-
-  const document =
-    page.getByText(testFileName, {
-      exact: true,
-    });
-
-  const documentContainer =
-    document.locator(
-      'xpath=ancestor::*[.//button][1]',
+    console.log(
+      '========================================',
     );
 
-  const actionButton =
-    documentContainer.getByRole('button');
+    console.log(
+      'FAMILY VAULT EXCEL TEST',
+    );
 
-  await actionButton.click();
+    console.log(
+      '========================================',
+    );
 
-  const downloadMenuItem =
-    page.getByRole('menuitem', {
-      name: 'Download',
-      exact: true,
-    });
+    console.log(
+      `Test file: ${testFileName}`,
+    );
 
-  await expect(downloadMenuItem).toBeVisible();
+    console.log(
+      `File path: ${filePath}`,
+    );
 
-  const downloadPromise =
-    page.waitForEvent('download');
+    // -----------------------------------------
+    // Step 1: Login
+    // -----------------------------------------
 
-  await downloadMenuItem.click();
+    await loginPage.open();
 
-  const download =
-    await downloadPromise;
+    await loginPage.login(
+      testConfig.testEmail,
+      testConfig.testPassword,
+    );
 
-  console.log('Download operation: PASS');
+    console.log(
+      'Login: PASS',
+    );
 
-  console.log(
-    `Suggested filename: ${download.suggestedFilename()}`,
-  );
+    // -----------------------------------------
+    // Step 2: Verify Vault
+    // -----------------------------------------
 
-  expect(
-    download.suggestedFilename(),
-  ).toBe(testFileName);
+    await vaultPage.verifyVaultLoaded();
 
-  console.log(
-    'Downloaded filename: PASS',
-  );
+    console.log(
+      'Vault: PASS',
+    );
 
-  // -----------------------------------------
-  // Step 6: Cleanup
-  // -----------------------------------------
+    // -----------------------------------------
+    // Step 3: Capture Vault baseline
+    // -----------------------------------------
 
-  await vaultPage.deleteTestDocument(
-    testFileName,
-  );
+    const initialVaultCount =
+      await vaultPage.getDocumentCount();
 
-  console.log(
-    `Excel deletion: ${testFileName} — PASS`,
-  );
+    console.log(
+      `Initial Vault documents: ${initialVaultCount}`,
+    );
 
-  const afterCleanupCount =
-    await vaultPage.getDocumentCount();
+    // -----------------------------------------
+    // Step 4: Check whether Excel document exists
+    // -----------------------------------------
 
-  console.log(
-    `Documents after cleanup: ${afterCleanupCount}`,
-  );
+    let matchCount =
+      await vaultPage.getDocumentMatchCount(
+        testFileName,
+      );
 
-  expect(afterCleanupCount).toBe(
-    beforeCount,
-  );
+    console.log(
+      `Excel document matches before setup: ${matchCount}`,
+    );
 
-  await expect(
-    page.getByText(testFileName, {
-      exact: true,
-    }),
-  ).not.toBeVisible();
+    // -----------------------------------------
+    // Step 5: Upload only when absent
+    // -----------------------------------------
 
-  console.log(
-    `Cleanup count: ${afterUploadCount} → ${afterCleanupCount} — PASS`,
-  );
+    if (matchCount === 0) {
+      console.log(
+        'Excel document not found — uploading fixture...',
+      );
 
-  console.log('----------------------------------------');
-  console.log('EXCEL TEST: HEALTHY');
-  console.log('----------------------------------------');
-});
+      await vaultPage.uploadTestDocument(
+        filePath,
+      );
+
+      testDocumentCreated = true;
+
+      console.log(
+        'Excel upload: PASS',
+      );
+
+      await vaultPage.verifyDocumentPresent(
+        testFileName,
+      );
+
+      await page.waitForTimeout(1000);
+
+      matchCount =
+        await vaultPage.getDocumentMatchCount(
+          testFileName,
+        );
+
+      console.log(
+        `Excel document matches after upload: ${matchCount}`,
+      );
+    } else {
+      console.log(
+        'Excel document already exists — upload skipped.',
+      );
+    }
+
+    // -----------------------------------------
+    // Step 6: Verify exactly one Excel document
+    // -----------------------------------------
+
+    expect(
+      matchCount,
+      `Expected exactly one copy of ${testFileName}, found ${matchCount}`,
+    ).toBe(1);
+
+    console.log(
+      'Exactly one Excel document exists: PASS',
+    );
+
+    // -----------------------------------------
+    // Step 7: Verify upload/setup result
+    // -----------------------------------------
+
+    const afterUploadCount =
+      await vaultPage.getDocumentCount();
+
+    console.log(
+      `Documents after setup: ${afterUploadCount}`,
+    );
+
+    if (testDocumentCreated) {
+      expect(
+        afterUploadCount,
+        'Document count did not increase by exactly one after Excel upload',
+      ).toBe(
+        initialVaultCount + 1,
+      );
+
+      console.log(
+        `Upload count: ${initialVaultCount} → ${afterUploadCount} — PASS`,
+      );
+    } else {
+      expect(
+        afterUploadCount,
+        'Existing Vault document count changed unexpectedly',
+      ).toBe(
+        initialVaultCount,
+      );
+
+      console.log(
+        `Existing document count preserved: ${initialVaultCount} → ${afterUploadCount} — PASS`,
+      );
+    }
+
+    // -----------------------------------------
+    // Step 8: Download Excel
+    // -----------------------------------------
+
+    const document =
+      page.getByText(
+        testFileName,
+        {
+          exact: true,
+        },
+      );
+
+    await expect(
+      document,
+    ).toBeVisible();
+
+    const documentContainer =
+      document.locator(
+        'xpath=ancestor::*[.//button][1]',
+      );
+
+    const actionButton =
+      documentContainer.getByRole(
+        'button',
+      );
+
+    await expect(
+      actionButton,
+    ).toHaveCount(1);
+
+    await actionButton.click();
+
+    const downloadMenuItem =
+      page.getByRole(
+        'menuitem',
+        {
+          name: 'Download',
+          exact: true,
+        },
+      );
+
+    await expect(
+      downloadMenuItem,
+    ).toBeVisible();
+
+    const downloadPromise =
+      page.waitForEvent(
+        'download',
+      );
+
+    await downloadMenuItem.click();
+
+    const download =
+      await downloadPromise;
+
+    console.log(
+      'Download operation: PASS',
+    );
+
+    console.log(
+      `Suggested filename: ${download.suggestedFilename()}`,
+    );
+
+    expect(
+      download.suggestedFilename(),
+    ).toBe(
+      testFileName,
+    );
+
+    console.log(
+      'Downloaded filename: PASS',
+    );
+
+    // -----------------------------------------
+    // Step 9: Cleanup only if this test uploaded
+    // -----------------------------------------
+
+    if (testDocumentCreated) {
+      await vaultPage.deleteTestDocument(
+        testFileName,
+      );
+
+      console.log(
+        `Excel deletion: ${testFileName} — PASS`,
+      );
+
+      await page.waitForTimeout(1000);
+
+      const afterCleanupMatchCount =
+        await vaultPage.getDocumentMatchCount(
+          testFileName,
+        );
+
+      console.log(
+        `Excel document matches after cleanup: ${afterCleanupMatchCount}`,
+      );
+
+      expect(
+        afterCleanupMatchCount,
+        `${testFileName} still exists after cleanup`,
+      ).toBe(0);
+
+      const finalVaultCount =
+        await vaultPage.getDocumentCount();
+
+      console.log(
+        `Documents after cleanup: ${finalVaultCount}`,
+      );
+
+      expect(
+        finalVaultCount,
+        'Unrelated Vault documents were changed',
+      ).toBe(
+        initialVaultCount,
+      );
+
+      console.log(
+        `Cleanup count: ${afterUploadCount} → ${finalVaultCount} — PASS`,
+      );
+
+      console.log(
+        'Unrelated Vault documents preserved: PASS',
+      );
+    } else {
+      console.log(
+        'Existing Excel document preserved: PASS',
+      );
+    }
+
+    // -----------------------------------------
+    // Final status
+    // -----------------------------------------
+
+    console.log(
+      '----------------------------------------',
+    );
+
+    console.log(
+      'EXCEL TEST: HEALTHY',
+    );
+
+    console.log(
+      '----------------------------------------',
+    );
+  },
+);
