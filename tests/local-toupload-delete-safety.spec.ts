@@ -90,6 +90,28 @@ test(
         'toupload-state.json',
       );
 
+    const summaryFilePath =
+      path.resolve(
+        process.cwd(),
+        'UploadStatus',
+        'upload-summary.json',
+      );
+
+    let originalSummaryContents:
+      | string
+      | undefined;
+
+    try {
+      originalSummaryContents =
+        await fs.readFile(
+          summaryFilePath,
+          'utf8',
+        );
+    } catch {
+      originalSummaryContents =
+        undefined;
+    }
+
     console.log(
       '========================================',
     );
@@ -430,127 +452,49 @@ test(
         );
 
         console.log(
-  'Local monitor state cleanup: PASS',
-);
-
-// -----------------------------------------
-// Rebuild upload summary after test cleanup
-// -----------------------------------------
-
-try {
-  const summaryFilePath =
-    path.resolve(
-      process.cwd(),
-      'UploadStatus',
-      'upload-summary.json',
-    );
-
-  const summaryRaw =
-    await fs.readFile(
-      summaryFilePath,
-      'utf8',
-    );
-
-  const uploadSummary =
-    JSON.parse(
-      summaryRaw,
-    ) as {
-      totalUploaded: number;
-      totalAlreadyExists: number;
-      totalFailed: number;
-      lastUpload?: {
-        fileName: string;
-        uploadedAt: string;
-      };
-    };
-
-  const remainingUploadedEntries =
-    Object.entries(uploadState).filter(
-      ([, fileState]) =>
-        fileState.status === 'UPLOADED' &&
-        !!fileState.uploadedAt,
-    );
-
-  const remainingAlreadyExistsEntries =
-    Object.entries(uploadState).filter(
-      ([, fileState]) =>
-        fileState.status ===
-        'ALREADY_EXISTS',
-    );
-
-  let lastUpload:
-    | {
-        fileName: string;
-        uploadedAt: string;
+          'Local monitor state cleanup: PASS',
+        );
+      } catch (cleanupError) {
+        console.error(
+          'Local monitor state cleanup failed:',
+          cleanupError,
+        );
       }
-    | undefined;
 
-  for (
-    const [
-      fileName,
-      fileState,
-    ] of remainingUploadedEntries
-  ) {
-    if (!fileState.uploadedAt) {
-      continue;
-    }
+      // -----------------------------------------
+      // Restore upload summary exactly as it was
+      // before the test
+      // -----------------------------------------
 
-    if (
-      !lastUpload ||
-      fileState.uploadedAt >
-        lastUpload.uploadedAt
-    ) {
-      lastUpload = {
-        fileName,
-        uploadedAt:
-          fileState.uploadedAt,
-      };
-    }
-  }
-
-  const rebuiltSummary = {
-    totalUploaded:
-      remainingUploadedEntries.length,
-
-    totalAlreadyExists:
-      remainingAlreadyExistsEntries.length,
-
-    totalFailed:
-      uploadSummary.totalFailed,
-
-    ...(lastUpload
-      ? {
-          lastUpload,
-        }
-      : {}),
-  };
-
-  await fs.writeFile(
-    summaryFilePath,
-    JSON.stringify(
-      rebuiltSummary,
-      null,
-      2,
-    ),
-    'utf8',
-  );
-
-      console.log(
-            'Upload summary cleanup: PASS',
+      try {
+        if (
+          originalSummaryContents !==
+          undefined
+        ) {
+          await fs.writeFile(
+            summaryFilePath,
+            originalSummaryContents,
+            'utf8',
           );
-        } catch (cleanupError) {
-          console.error(
-            'Upload summary cleanup failed:',
-            cleanupError,
-          );
+        } else {
+          try {
+            await fs.unlink(
+              summaryFilePath,
+            );
+          } catch {
+            // File already absent.
+          }
         }
 
-        } catch (cleanupError) {
-          console.error(
-            'Local monitor state cleanup failed:',
-            cleanupError,
-          );
-        }
+        console.log(
+          'Upload summary cleanup: PASS',
+        );
+      } catch (cleanupError) {
+        console.error(
+          'Upload summary cleanup failed:',
+          cleanupError,
+        );
+      }
 
       console.log(
         '========================================',
