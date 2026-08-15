@@ -2,92 +2,172 @@ import { test, expect } from '@playwright/test';
 import { LoginPage } from '../pages/LoginPage';
 import { VaultPage } from '../pages/VaultPage';
 import { testConfig } from '../config/test-config';
+import {
+  TEST_DOCUMENT_NAME,
+  ensureTestDocument,
+  cleanupTestDocument,
+} from './helpers/test-document';
 
-test('Inspect Family Vault document download', async ({ page }) => {
-  const loginPage = new LoginPage(page);
-  const vaultPage = new VaultPage(page);
+test(
+  'Inspect Family Vault document download',
+  async ({ page }) => {
+    const loginPage =
+      new LoginPage(page);
 
-  const testFileName = 'FamilyVault_Test_01.txt';
+    const vaultPage =
+      new VaultPage(page);
 
-  await loginPage.open();
+    let initialVaultCount = 0;
+    let testDocumentCreated = false;
 
-  await loginPage.login(
-    testConfig.testEmail,
-    testConfig.testPassword,
-  );
+    try {
+      // -----------------------------------------
+      // Login
+      // -----------------------------------------
 
-  await vaultPage.verifyVaultLoaded();
+      await loginPage.open();
 
-  await page.waitForTimeout(1500);
+      await loginPage.login(
+        testConfig.testEmail,
+        testConfig.testPassword,
+      );
 
-  // The V2 test normally cleans up the test file,
-  // so create it first if it is not present.
-  const document = page.getByText(
-    testFileName,
-    { exact: true },
-  );
+      await vaultPage.verifyVaultLoaded();
 
-  if (await document.count() === 0) {
-    throw new Error(
-      `${testFileName} is not currently in the Vault. Run the V2 daily test first.`,
-    );
-  }
+      // -----------------------------------------
+      // Ensure test document exists
+      // -----------------------------------------
 
-  await expect(document).toBeVisible();
+      const setup =
+        await ensureTestDocument(
+          vaultPage,
+        );
 
-  const documentContainer = document.locator(
-    'xpath=ancestor::*[.//button][1]',
-  );
+      initialVaultCount =
+        setup.initialVaultCount;
 
-  const actionButton = documentContainer.getByRole(
-    'button',
-  );
+      testDocumentCreated =
+        setup.testDocumentCreated;
 
-  await expect(actionButton).toHaveCount(1);
+      await page.waitForTimeout(1500);
 
-  await actionButton.click();
+      const document =
+        page.getByText(
+          TEST_DOCUMENT_NAME,
+          {
+            exact: true,
+          },
+        );
 
-  const downloadMenuItem = page.getByRole(
-    'menuitem',
-    {
-      name: 'Download',
-      exact: true,
-    },
-  );
+      await expect(
+        document,
+      ).toBeVisible();
 
-  await expect(downloadMenuItem).toBeVisible();
+      const documentContainer =
+        document.locator(
+          'xpath=ancestor::*[.//button][1]',
+        );
 
-  console.log('========================================');
-  console.log('DOCUMENT DOWNLOAD INSPECTION');
-  console.log('========================================');
-  console.log('Download menu item: PASS');
+      const actionButton =
+        documentContainer.getByRole(
+          'button',
+        );
 
-  // Do NOT save/modify anything yet.
-  // Just determine whether clicking Download
-  // produces a Playwright download event.
+      await expect(
+        actionButton,
+      ).toHaveCount(1);
 
-  const downloadPromise = page.waitForEvent(
-    'download',
-    {
-      timeout: 10000,
-    },
-  );
+      await actionButton.click();
 
-  await downloadMenuItem.click();
+      // -----------------------------------------
+      // Find Download action
+      // -----------------------------------------
 
-  const download = await downloadPromise;
+      const downloadMenuItem =
+        page.getByRole(
+          'menuitem',
+          {
+            name: 'Download',
+            exact: true,
+          },
+        );
 
-  console.log(
-    `Download event: PASS`,
-  );
+      await expect(
+        downloadMenuItem,
+      ).toBeVisible();
 
-  console.log(
-    `Suggested filename: ${download.suggestedFilename()}`,
-  );
+      console.log(
+        '========================================',
+      );
 
-  console.log(
-    `Download failure: ${await download.failure()}`,
-  );
+      console.log(
+        'DOCUMENT DOWNLOAD INSPECTION',
+      );
 
-  console.log('========================================');
-});
+      console.log(
+        '========================================',
+      );
+
+      console.log(
+        'Download menu item: PASS',
+      );
+
+      // -----------------------------------------
+      // Inspect download event only
+      // -----------------------------------------
+
+      const downloadPromise =
+        page.waitForEvent(
+          'download',
+          {
+            timeout: 10000,
+          },
+        );
+
+      await downloadMenuItem.click();
+
+      const download =
+        await downloadPromise;
+
+      console.log(
+        'Download event: PASS',
+      );
+
+      console.log(
+        `Suggested filename: ${
+          download.suggestedFilename()
+        }`,
+      );
+
+      console.log(
+        `Download failure: ${
+          await download.failure()
+        }`,
+      );
+
+      console.log(
+        '========================================',
+      );
+    } finally {
+      // -----------------------------------------
+      // Restore stable Vault page before cleanup
+      // -----------------------------------------
+
+      if (testDocumentCreated) {
+        await page.reload();
+
+        await vaultPage.verifyVaultLoaded();
+      }
+
+      // -----------------------------------------
+      // Cleanup only test-created document
+      // -----------------------------------------
+
+      await cleanupTestDocument(
+        vaultPage,
+        initialVaultCount,
+        testDocumentCreated,
+      );
+    }
+  },
+);

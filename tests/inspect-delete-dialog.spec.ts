@@ -2,127 +2,282 @@ import { test, expect } from '@playwright/test';
 import { LoginPage } from '../pages/LoginPage';
 import { VaultPage } from '../pages/VaultPage';
 import { testConfig } from '../config/test-config';
+import {
+  TEST_DOCUMENT_NAME,
+  ensureTestDocument,
+  cleanupTestDocument,
+} from './helpers/test-document';
 
-test('Inspect Family Vault delete confirmation', async ({ page }) => {
-  const loginPage = new LoginPage(page);
-  const vaultPage = new VaultPage(page);
+test(
+  'Inspect Family Vault delete confirmation',
+  async ({ page }) => {
+    const loginPage =
+      new LoginPage(page);
 
-  const testFileName = 'FamilyVault_Test_01.txt';
+    const vaultPage =
+      new VaultPage(page);
 
-  await loginPage.open();
+    let initialVaultCount = 0;
+    let testDocumentCreated = false;
 
-  await loginPage.login(
-    testConfig.testEmail,
-    testConfig.testPassword,
-  );
+    try {
+      // -----------------------------------------
+      // Login
+      // -----------------------------------------
 
-  await vaultPage.verifyVaultLoaded();
+      await loginPage.open();
 
-  await page.waitForTimeout(1500);
+      await loginPage.login(
+        testConfig.testEmail,
+        testConfig.testPassword,
+      );
 
-  const document = page.getByText(
-    testFileName,
-    { exact: true },
-  );
+      await vaultPage.verifyVaultLoaded();
 
-  await expect(document).toBeVisible();
+      // -----------------------------------------
+      // Ensure test document exists
+      // -----------------------------------------
 
-  const documentContainer = document.locator(
-    'xpath=ancestor::*[.//button][1]',
-  );
+      const setup =
+        await ensureTestDocument(
+          vaultPage,
+        );
 
-  const actionButton = documentContainer.getByRole(
-    'button',
-  );
+      initialVaultCount =
+        setup.initialVaultCount;
 
-  await expect(actionButton).toHaveCount(1);
+      testDocumentCreated =
+        setup.testDocumentCreated;
 
-  await actionButton.click();
+      await page.waitForTimeout(1500);
 
-  const deleteMenuItem = page.getByRole(
-    'menuitem',
-    {
-      name: 'Delete',
-      exact: true,
-    },
-  );
+      const document =
+        page.getByText(
+          TEST_DOCUMENT_NAME,
+          {
+            exact: true,
+          },
+        );
 
-  await expect(deleteMenuItem).toBeVisible();
+      await expect(
+        document,
+      ).toBeVisible();
 
-  // -----------------------------------------
-  // Inspect native browser confirmation
-  // -----------------------------------------
+      // -----------------------------------------
+      // Open document action menu
+      // -----------------------------------------
 
-  page.once('dialog', async (dialog) => {
-    console.log('========================================');
-    console.log('NATIVE BROWSER DIALOG DETECTED');
-    console.log('========================================');
-    console.log(`Dialog type: ${dialog.type()}`);
-    console.log(`Dialog message: ${dialog.message()}`);
-    console.log('========================================');
+      const documentContainer =
+        document.locator(
+          'xpath=ancestor::*[.//button][1]',
+        );
 
-    // IMPORTANT:
-    // Dismiss instead of accepting.
-    await dialog.dismiss();
-  });
+      const actionButton =
+        documentContainer.getByRole(
+          'button',
+        );
 
-  await deleteMenuItem.click();
+      await expect(
+        actionButton,
+      ).toHaveCount(1);
 
-  // Give the application time to render any custom confirmation.
-  await page.waitForTimeout(1000);
+      await actionButton.click();
 
-  console.log('========================================');
-  console.log('DELETE CONFIRMATION INSPECTION');
-  console.log('========================================');
+      // -----------------------------------------
+      // Open Delete
+      // -----------------------------------------
 
-  // Inspect possible ARIA roles.
-  console.log(
-    `Dialog count: ${await page.getByRole('dialog').count()}`,
-  );
+      const deleteMenuItem =
+        page.getByRole(
+          'menuitem',
+          {
+            name: 'Delete',
+            exact: true,
+          },
+        );
 
-  console.log(
-    `Alert count: ${await page.getByRole('alert').count()}`,
-  );
+      await expect(
+        deleteMenuItem,
+      ).toBeVisible();
 
-  console.log(
-    `Alertdialog count: ${await page.getByRole('alertdialog').count()}`,
-  );
+      // -----------------------------------------
+      // Inspect native browser confirmation
+      // -----------------------------------------
 
-  // Inspect visible text.
-  const bodyText = await page.locator('body').innerText();
+      page.once(
+        'dialog',
+        async (dialog) => {
+          console.log(
+            '========================================',
+          );
 
-  console.log('----------------------------------------');
-  console.log('PAGE TEXT AFTER DELETE CLICK:');
-  console.log(bodyText.substring(0, 3000));
+          console.log(
+            'NATIVE BROWSER DIALOG DETECTED',
+          );
 
-  // Inspect visible buttons.
-  console.log('----------------------------------------');
-  console.log('VISIBLE BUTTONS:');
+          console.log(
+            '========================================',
+          );
 
-  const buttons = await page.getByRole('button').allTextContents();
+          console.log(
+            `Dialog type: ${dialog.type()}`,
+          );
 
-  console.log(buttons);
+          console.log(
+            `Dialog message: ${dialog.message()}`,
+          );
 
-  console.log('----------------------------------------');
+          console.log(
+            '========================================',
+          );
 
-  const buttonMetadata = await page
-    .locator('button:visible')
-    .evaluateAll((elements) =>
-      elements.map((element) => ({
-        text: (element.textContent || '').trim(),
-        ariaLabel: element.getAttribute('aria-label'),
-        title: element.getAttribute('title'),
-      })),
-    );
+          // IMPORTANT:
+          // Dismiss instead of accepting.
+          await dialog.dismiss();
+        },
+      );
 
-  console.log(
-    JSON.stringify(buttonMetadata, null, 2),
-  );
+      await deleteMenuItem.click();
 
-  console.log('========================================');
+      // -----------------------------------------
+      // Allow UI to settle
+      // -----------------------------------------
 
-  await page.screenshot({
-    path: 'screenshots/delete-confirmation-inspection.png',
-    fullPage: true,
-  });
-});
+      await page.waitForTimeout(1000);
+
+      console.log(
+        '========================================',
+      );
+
+      console.log(
+        'DELETE CONFIRMATION INSPECTION',
+      );
+
+      console.log(
+        '========================================',
+      );
+
+      console.log(
+        `Dialog count: ${
+          await page.getByRole('dialog').count()
+        }`,
+      );
+
+      console.log(
+        `Alert count: ${
+          await page.getByRole('alert').count()
+        }`,
+      );
+
+      console.log(
+        `Alertdialog count: ${
+          await page.getByRole('alertdialog').count()
+        }`,
+      );
+
+      // -----------------------------------------
+      // Inspect visible text
+      // -----------------------------------------
+
+      const bodyText =
+        await page.locator(
+          'body',
+        ).innerText();
+
+      console.log(
+        '----------------------------------------',
+      );
+
+      console.log(
+        'PAGE TEXT AFTER DELETE CLICK:',
+      );
+
+      console.log(
+        bodyText.substring(
+          0,
+          3000,
+        ),
+      );
+
+      // -----------------------------------------
+      // Inspect visible buttons
+      // -----------------------------------------
+
+      console.log(
+        '----------------------------------------',
+      );
+
+      console.log(
+        'VISIBLE BUTTONS:',
+      );
+
+      const buttons =
+        await page
+          .getByRole('button')
+          .allTextContents();
+
+      console.log(
+        buttons,
+      );
+
+      console.log(
+        '----------------------------------------',
+      );
+
+      const buttonMetadata =
+        await page
+          .locator('button:visible')
+          .evaluateAll(
+            (elements) =>
+              elements.map(
+                (element) => ({
+                  text:
+                    (
+                      element.textContent ||
+                      ''
+                    ).trim(),
+
+                  ariaLabel:
+                    element.getAttribute(
+                      'aria-label',
+                    ),
+
+                  title:
+                    element.getAttribute(
+                      'title',
+                    ),
+                }),
+              ),
+          );
+
+      console.log(
+        JSON.stringify(
+          buttonMetadata,
+          null,
+          2,
+        ),
+      );
+
+      console.log(
+        '========================================',
+      );
+
+      await page.screenshot({
+        path:
+          'screenshots/delete-confirmation-inspection.png',
+        fullPage: true,
+      });
+    } finally {
+      // -----------------------------------------
+      // Cleanup only when this test created
+      // the test document
+      // -----------------------------------------
+
+      await cleanupTestDocument(
+        vaultPage,
+        initialVaultCount,
+        testDocumentCreated,
+      );
+    }
+  },
+);

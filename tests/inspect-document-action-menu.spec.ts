@@ -2,81 +2,187 @@ import { test } from '@playwright/test';
 import { LoginPage } from '../pages/LoginPage';
 import { VaultPage } from '../pages/VaultPage';
 import { testConfig } from '../config/test-config';
+import {
+  TEST_DOCUMENT_NAME,
+  ensureTestDocument,
+  cleanupTestDocument,
+} from './helpers/test-document';
 
-test('Inspect Family Vault document action menu', async ({ page }) => {
-  const loginPage = new LoginPage(page);
-  const vaultPage = new VaultPage(page);
+test(
+  'Inspect Family Vault document action menu',
+  async ({ page }) => {
+    const loginPage =
+      new LoginPage(page);
 
-  const testFileName = 'FamilyVault_Test_01.txt';
+    const vaultPage =
+      new VaultPage(page);
 
-  await loginPage.open();
+    let initialVaultCount = 0;
+    let testDocumentCreated = false;
 
-  await loginPage.login(
-    testConfig.testEmail,
-    testConfig.testPassword,
-  );
+    try {
+      // -----------------------------------------
+      // Login
+      // -----------------------------------------
 
-  await vaultPage.verifyVaultLoaded();
+      await loginPage.open();
 
-  await page.waitForTimeout(1500);
+      await loginPage.login(
+        testConfig.testEmail,
+        testConfig.testPassword,
+      );
 
-  const document = page.getByText(
-    testFileName,
-    { exact: true },
-  );
+      await vaultPage.verifyVaultLoaded();
 
-  await document.scrollIntoViewIfNeeded();
+      // -----------------------------------------
+      // Ensure test document exists
+      // -----------------------------------------
 
-  const documentContainer = document.locator(
-    'xpath=ancestor::*[.//button][1]',
-  );
+      const setup =
+        await ensureTestDocument(
+          vaultPage,
+        );
 
-  const actionButton = documentContainer.getByRole('button');
+      initialVaultCount =
+        setup.initialVaultCount;
 
-  console.log('========================================');
-  console.log('DOCUMENT ACTION MENU INSPECTION');
-  console.log('========================================');
+      testDocumentCreated =
+        setup.testDocumentCreated;
 
-  console.log(
-    `Action button count: ${await actionButton.count()}`,
-  );
+      await page.waitForTimeout(1500);
 
-  if (await actionButton.count() !== 1) {
-    throw new Error(
-      `Expected exactly 1 document action button, found ${await actionButton.count()}`,
-    );
-  }
+      const document =
+        page.getByText(
+          TEST_DOCUMENT_NAME,
+          {
+            exact: true,
+          },
+        );
 
-  await actionButton.click();
+      await document.scrollIntoViewIfNeeded();
 
-  console.log('Document action button: CLICKED');
+      const documentContainer =
+        document.locator(
+          'xpath=ancestor::*[.//button][1]',
+        );
 
-  await page.waitForTimeout(500);
+      const actionButton =
+        documentContainer.getByRole(
+          'button',
+        );
 
-  console.log('----------------------------------------');
+      console.log(
+        '========================================',
+      );
 
-  const menuCount = await page.getByRole('menu').count();
+      console.log(
+        'DOCUMENT ACTION MENU INSPECTION',
+      );
 
-  console.log(`Menu count: ${menuCount}`);
+      console.log(
+        '========================================',
+      );
 
-  const menuItems = await page
-    .getByRole('menuitem')
-    .allTextContents();
+      console.log(
+        `Action button count: ${
+          await actionButton.count()
+        }`,
+      );
 
-  console.log('Menu items:');
-  console.log(menuItems);
+      if (
+        await actionButton.count() !==
+        1
+      ) {
+        throw new Error(
+          `Expected exactly 1 document action button, found ${
+            await actionButton.count()
+          }`,
+        );
+      }
 
-  console.log('----------------------------------------');
+      await actionButton.click();
 
-  const visibleText = await page.locator('body').innerText();
+      console.log(
+        'Document action button: CLICKED',
+      );
 
-  console.log('Page text after opening action menu:');
-  console.log(visibleText.substring(0, 3000));
+      await page.waitForTimeout(500);
 
-  console.log('========================================');
+      console.log(
+        '----------------------------------------',
+      );
 
-  await page.screenshot({
-    path: 'screenshots/document-action-menu-inspection.png',
-    fullPage: true,
-  });
-});
+      const menuCount =
+        await page
+          .getByRole('menu')
+          .count();
+
+      console.log(
+        `Menu count: ${menuCount}`,
+      );
+
+      const menuItems =
+        await page
+          .getByRole('menuitem')
+          .allTextContents();
+
+      console.log(
+        'Menu items:',
+      );
+
+      console.log(
+        menuItems,
+      );
+
+      console.log(
+        '----------------------------------------',
+      );
+
+      const visibleText =
+        await page
+          .locator('body')
+          .innerText();
+
+      console.log(
+        'Page text after opening action menu:',
+      );
+
+      console.log(
+        visibleText.substring(
+          0,
+          3000,
+        ),
+      );
+
+      console.log(
+        '========================================',
+      );
+
+      await page.screenshot({
+        path:
+          'screenshots/document-action-menu-inspection.png',
+        fullPage: true,
+      });
+    } finally {
+      // -----------------------------------------
+      // Restore stable Vault page before cleanup
+      // -----------------------------------------
+
+      if (testDocumentCreated) {
+        await page.reload();
+
+        await vaultPage.verifyVaultLoaded();
+      }
+
+      // -----------------------------------------
+      // Cleanup only test-created document
+      // -----------------------------------------
+
+      await cleanupTestDocument(
+        vaultPage,
+        initialVaultCount,
+        testDocumentCreated,
+      );
+    }
+  },
+);
