@@ -2,167 +2,498 @@ import { test, expect } from '@playwright/test';
 import { LoginPage } from '../pages/LoginPage';
 import { VaultPage } from '../pages/VaultPage';
 import { testConfig } from '../config/test-config';
+import path from 'path';
 
-test('Family Vault - Save document as new version', async ({ page }) => {
-  const loginPage = new LoginPage(page);
-  const vaultPage = new VaultPage(page);
+test(
+  'Family Vault - Save document as new version',
+  async ({ page }) => {
+    const loginPage =
+      new LoginPage(page);
 
-  const testFileName = 'FamilyVault_Test_01.txt';
+    const vaultPage =
+      new VaultPage(page);
 
-  await loginPage.open();
+    const testFileName =
+      'FamilyVault_Test_01.txt';
 
-  await loginPage.login(
-    testConfig.testEmail,
-    testConfig.testPassword,
-  );
+    const versionFileName =
+      'FamilyVault_Test_01_v2.txt';
 
-  await vaultPage.verifyVaultLoaded();
+    const filePath =
+      path.resolve(
+        process.cwd(),
+        testFileName,
+      );
 
-  await page.waitForTimeout(1500);
+    let baseDocumentCreated =
+      false;
 
-  const document = page.getByText(
-    testFileName,
-    { exact: true },
-  );
+    console.log(
+      '========================================',
+    );
 
-  await expect(document).toBeVisible();
+    console.log(
+      'EDIT / NEW VERSION TEST',
+    );
 
-  const beforeCount =
-    await vaultPage.getDocumentCount();
+    console.log(
+      '========================================',
+    );
 
-  console.log('========================================');
-  console.log('EDIT / NEW VERSION TEST');
-  console.log('========================================');
-  console.log(`Documents before edit: ${beforeCount}`);
+    console.log(
+      `Base document: ${testFileName}`,
+    );
 
-  // -----------------------------------------
-  // Open document action menu
-  // -----------------------------------------
+    console.log(
+      `Expected version: ${versionFileName}`,
+    );
 
-  const documentContainer = document.locator(
-    'xpath=ancestor::*[.//button][1]',
-  );
+    // -----------------------------------------
+    // Step 1: Login
+    // -----------------------------------------
 
-  const actionButton = documentContainer.getByRole(
-    'button',
-  );
+    await loginPage.open();
 
-  await expect(actionButton).toHaveCount(1);
+    await loginPage.login(
+      testConfig.testEmail,
+      testConfig.testPassword,
+    );
 
-  await actionButton.click();
+    console.log(
+      'Login: PASS',
+    );
 
-  // -----------------------------------------
-  // Open Edit
-  // -----------------------------------------
+    // -----------------------------------------
+    // Step 2: Verify Vault
+    // -----------------------------------------
 
-  const editMenuItem = page.getByRole(
-    'menuitem',
-    {
-      name: 'Edit (save as new version)',
-      exact: true,
-    },
-  );
+    await vaultPage.verifyVaultLoaded();
 
-  await expect(editMenuItem).toBeVisible();
+    console.log(
+      'Vault: PASS',
+    );
 
-  await editMenuItem.click();
+    // -----------------------------------------
+    // Step 3: Capture Vault baseline
+    // -----------------------------------------
 
-  const editDialog = page.getByRole('dialog');
+    const initialVaultCount =
+      await vaultPage.getDocumentCount();
 
-  await expect(editDialog).toBeVisible();
+    console.log(
+      `Initial Vault documents: ${initialVaultCount}`,
+    );
 
-  // Wait for the file content to load.
-  await page.waitForTimeout(2000);
+    // -----------------------------------------
+    // Step 4: Ensure exactly one base document
+    // -----------------------------------------
 
-  // -----------------------------------------
-  // Identify the actual file-content textarea
-  // -----------------------------------------
+    let baseMatchCount =
+      await vaultPage.getDocumentMatchCount(
+        testFileName,
+      );
 
-  const textareas = editDialog.locator(
-    'textarea:visible',
-  );
+    console.log(
+      `Base document matches before setup: ${baseMatchCount}`,
+    );
 
-  await expect(textareas).toHaveCount(2);
+    if (baseMatchCount === 0) {
+      console.log(
+        'Base document not found — uploading fixture...',
+      );
 
-  const fileContent = textareas.nth(0);
+      await vaultPage.uploadTestDocument(
+        filePath,
+      );
 
-  const originalContent =
-    await fileContent.inputValue();
+      baseDocumentCreated = true;
 
-  console.log(
-    `Original content: ${originalContent.trim()}`,
-  );
+      console.log(
+        'Base document upload: PASS',
+      );
 
-  // -----------------------------------------
-  // Make a controlled change
-  // -----------------------------------------
+      await vaultPage.verifyDocumentPresent(
+        testFileName,
+      );
 
-  const newContent =
-    `${originalContent.trimEnd()}\nVersion 2 test`;
+      await page.waitForTimeout(1000);
 
-  await fileContent.fill(newContent);
+      baseMatchCount =
+        await vaultPage.getDocumentMatchCount(
+          testFileName,
+        );
 
-  console.log('File content modification: PASS');
+      console.log(
+        `Base document matches after setup: ${baseMatchCount}`,
+      );
+    }
 
-  // -----------------------------------------
-  // Save as new version
-  // -----------------------------------------
+    expect(
+      baseMatchCount,
+      `Expected exactly one base document, found ${baseMatchCount}`,
+    ).toBe(1);
 
-  const saveVersionButton =
-    editDialog.getByRole('button', {
-      name: 'Save as new version',
-      exact: true,
+    console.log(
+      'Exactly one base document exists: PASS',
+    );
+
+    // -----------------------------------------
+    // Step 5: Ensure old version artifact is absent
+    // -----------------------------------------
+
+    const existingVersionCount =
+      await vaultPage.getDocumentMatchCount(
+        versionFileName,
+      );
+
+    console.log(
+      `Version document matches before edit: ${existingVersionCount}`,
+    );
+
+    expect(
+      existingVersionCount,
+      `Old version artifact already exists: ${versionFileName}`,
+    ).toBe(0);
+
+    console.log(
+      'Version artifact does not already exist: PASS',
+    );
+
+    // -----------------------------------------
+    // Step 6: Open base document action menu
+    // -----------------------------------------
+
+    const document =
+      page.getByText(
+        testFileName,
+        {
+          exact: true,
+        },
+      );
+
+    await expect(
+      document,
+    ).toBeVisible();
+
+    const documentContainer =
+      document.locator(
+        'xpath=ancestor::*[.//button][1]',
+      );
+
+    const actionButton =
+      documentContainer.getByRole(
+        'button',
+      );
+
+    await expect(
+      actionButton,
+    ).toHaveCount(1);
+
+    await actionButton.click();
+
+    // -----------------------------------------
+    // Step 7: Open Edit
+    // -----------------------------------------
+
+    const editMenuItem =
+      page.getByRole(
+        'menuitem',
+        {
+          name: 'Edit (save as new version)',
+          exact: true,
+        },
+      );
+
+    await expect(
+      editMenuItem,
+    ).toBeVisible();
+
+    await editMenuItem.click();
+
+    const editDialog =
+      page.getByRole('dialog');
+
+    await expect(
+      editDialog,
+    ).toBeVisible();
+
+    // -----------------------------------------
+    // Step 8: Wait for file content
+    // -----------------------------------------
+
+    await page.waitForTimeout(2000);
+
+    const textareas =
+      editDialog.locator(
+        'textarea:visible',
+      );
+
+    await expect(
+      textareas,
+    ).toHaveCount(2);
+
+    const fileContent =
+      textareas.nth(0);
+
+    const originalContent =
+      await fileContent.inputValue();
+
+    console.log(
+      `Original content: ${originalContent.trim()}`,
+    );
+
+    // -----------------------------------------
+    // Step 9: Make controlled change
+    // -----------------------------------------
+
+    const newContent =
+      `${originalContent.trimEnd()}\nVersion 2 test`;
+
+    await fileContent.fill(
+      newContent,
+    );
+
+    console.log(
+      'File content modification: PASS',
+    );
+
+    // -----------------------------------------
+    // Step 10: Save as new version
+    // -----------------------------------------
+
+    const saveVersionButton =
+      editDialog.getByRole(
+        'button',
+        {
+          name: 'Save as new version',
+          exact: true,
+        },
+      );
+
+    await expect(
+      saveVersionButton,
+    ).toBeVisible();
+
+    await saveVersionButton.click();
+
+    console.log(
+      'Save as new version: CLICKED',
+    );
+
+    await expect(
+      editDialog,
+    ).not.toBeVisible({
+      timeout: 30000,
     });
 
-  await expect(saveVersionButton).toBeVisible();
+    await page.waitForTimeout(2000);
 
-  await saveVersionButton.click();
+    // -----------------------------------------
+    // Step 11: Verify base document remains
+    // -----------------------------------------
 
-  console.log(
-    'Save as new version: CLICKED',
-  );
+    await vaultPage.verifyDocumentPresent(
+      testFileName,
+    );
 
-  // Wait for the edit dialog to close.
-  await expect(editDialog).not.toBeVisible({
-    timeout: 30000,
-  });
+    console.log(
+      `Base document remains: ${testFileName} — PASS`,
+    );
 
-  // Allow Vault data to refresh.
-  await page.waitForTimeout(2000);
+    // -----------------------------------------
+    // Step 12: Verify version document exists
+    // -----------------------------------------
 
-  // -----------------------------------------
-  // Verify document remains
-  // -----------------------------------------
+    const versionMatchCount =
+      await vaultPage.getDocumentMatchCount(
+        versionFileName,
+      );
 
-  await vaultPage.verifyDocumentPresent(
-    testFileName,
-  );
+    console.log(
+      `Version document matches after edit: ${versionMatchCount}`,
+    );
 
-  console.log(
-    `Document remains after versioning: ${testFileName} — PASS`,
-  );
+    expect(
+      versionMatchCount,
+      `Expected exactly one version document: ${versionFileName}`,
+    ).toBe(1);
 
-  const afterCount =
-    await vaultPage.getDocumentCount();
+    console.log(
+      'Exactly one new version exists: PASS',
+    );
 
-  console.log(
-    `Documents after edit: ${afterCount}`,
-  );
+    // -----------------------------------------
+    // Step 13: Verify Vault count increased by one
+    // -----------------------------------------
 
-  // -----------------------------------------
-  // Verify count
-  // -----------------------------------------
+    const afterVersionCount =
+      await vaultPage.getDocumentCount();
 
-  expect(
-    afterCount,
-    'Document count changed after creating new version',
-  ).toBe(beforeCount);
+    console.log(
+      `Documents after versioning: ${afterVersionCount}`,
+    );
 
-  console.log(
-    `Document count: ${beforeCount} → ${afterCount} — PASS`,
-  );
+    expect(
+      afterVersionCount,
+      'Document count did not increase by exactly one after creating new version',
+    ).toBe(
+      initialVaultCount + 1,
+    );
 
-  console.log('----------------------------------------');
-  console.log('NEW VERSION TEST: HEALTHY');
-  console.log('----------------------------------------');
-});
+    console.log(
+      `Document count: ${initialVaultCount} → ${afterVersionCount} — PASS`,
+    );
+
+    // -----------------------------------------
+    // Step 14: Cleanup only created version
+    // -----------------------------------------
+
+    await vaultPage.deleteTestDocument(
+      versionFileName,
+    );
+
+    console.log(
+      `Version cleanup: ${versionFileName} — PASS`,
+    );
+
+    await page.waitForTimeout(1000);
+
+    // -----------------------------------------
+    // Step 15: Verify version removed
+    // -----------------------------------------
+
+    const afterCleanupVersionCount =
+      await vaultPage.getDocumentMatchCount(
+        versionFileName,
+      );
+
+    console.log(
+      `Version matches after cleanup: ${afterCleanupVersionCount}`,
+    );
+
+    expect(
+      afterCleanupVersionCount,
+      `${versionFileName} still exists after cleanup`,
+    ).toBe(0);
+
+    console.log(
+      'Created version removed: PASS',
+    );
+
+    // -----------------------------------------
+    // Step 16: Verify base document remains
+    // -----------------------------------------
+
+    const finalBaseMatchCount =
+      await vaultPage.getDocumentMatchCount(
+        testFileName,
+      );
+
+    expect(
+      finalBaseMatchCount,
+      'Base document was removed during version cleanup',
+    ).toBe(1);
+
+    console.log(
+      'Base document preserved: PASS',
+    );
+
+    // -----------------------------------------
+    // Step 17: Verify Vault restored
+    // -----------------------------------------
+
+    const finalVaultCount =
+      await vaultPage.getDocumentCount();
+
+    console.log(
+      `Documents after cleanup: ${finalVaultCount}`,
+    );
+
+    expect(
+      finalVaultCount,
+      'Vault did not return to its initial document count',
+    ).toBe(
+      initialVaultCount,
+    );
+
+    console.log(
+      `Cleanup count: ${afterVersionCount} → ${finalVaultCount} — PASS`,
+    );
+
+    // -----------------------------------------
+    // Step 18: Cleanup base document if test created it
+    // -----------------------------------------
+
+    if (baseDocumentCreated) {
+      await vaultPage.deleteTestDocument(
+        testFileName,
+      );
+
+      console.log(
+        `Test-created base document cleanup: ${testFileName} — PASS`,
+      );
+
+      await page.waitForTimeout(1000);
+
+      const afterBaseCleanupCount =
+        await vaultPage.getDocumentMatchCount(
+          testFileName,
+        );
+
+      expect(
+        afterBaseCleanupCount,
+        `${testFileName} still exists after final cleanup`,
+      ).toBe(0);
+
+      const finalCleanVaultCount =
+        await vaultPage.getDocumentCount();
+
+      expect(
+        finalCleanVaultCount,
+        'Vault did not return to its original count after final cleanup',
+      ).toBe(
+        initialVaultCount,
+      );
+
+      console.log(
+        `Final Vault count: ${finalCleanVaultCount} — PASS`,
+      );
+    }
+
+    // -----------------------------------------
+    // Final status
+    // -----------------------------------------
+
+    console.log(
+      '----------------------------------------',
+    );
+
+    console.log(
+      'New version creation: PASS',
+    );
+
+    console.log(
+      'New version verification: PASS',
+    );
+
+    console.log(
+      'Created version cleanup: PASS',
+    );
+
+    console.log(
+      'Base document preserved: PASS',
+    );
+
+    console.log(
+      'Vault baseline restored: PASS',
+    );
+
+    console.log(
+      'NEW VERSION TEST: HEALTHY',
+    );
+
+    console.log(
+      '----------------------------------------',
+    );
+  },
+);
