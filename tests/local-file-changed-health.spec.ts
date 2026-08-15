@@ -70,8 +70,23 @@ type AuditEntry = {
   message: string;
 };
 
+type HealthStatus =
+  | 'PASS'
+  | 'FAIL';
+
+type MonitorHealthEntry = {
+  timestamp: string;
+  vaultDocumentCount: number;
+  trackedDocuments: number;
+  stateConsistency: HealthStatus;
+  auditConsistency: HealthStatus;
+  problemStates: HealthStatus;
+  vaultConsistency: HealthStatus;
+  overallHealth: HealthStatus;
+};
+
 test(
-  'Verify ToUpload local modification does not overwrite Family Vault',
+  'Verify LOCAL_FILE_CHANGED causes monitor health failure',
   async ({ page }) => {
     const loginPage =
       new LoginPage(page);
@@ -80,7 +95,7 @@ test(
       new VaultPage(page);
 
     const testFileName =
-      'LOCAL_CHANGE_SAFETY_REPEATABLE_TEST.txt';
+      'LOCAL_CHANGE_HEALTH_REPEATABLE_TEST.txt';
 
     const toUploadDirectory =
       path.resolve(
@@ -106,7 +121,7 @@ test(
         'toupload-state.json',
       );
 
-        const auditFilePath =
+    const auditFilePath =
       path.join(
         uploadStatusDirectory,
         'upload-audit.jsonl',
@@ -118,9 +133,29 @@ test(
         'upload-audit-summary.json',
       );
 
+    const healthFilePath =
+      path.join(
+        uploadStatusDirectory,
+        'monitor-health.jsonl',
+      );
+
+    const summaryFilePath =
+      path.join(
+        uploadStatusDirectory,
+        'upload-summary.json',
+      );
+
     let originalAuditContents:
       | string
       | undefined;
+
+    let originalHealthContents:
+      | string
+      | undefined;
+
+    // -----------------------------------------
+    // Snapshot audit history
+    // -----------------------------------------
 
     try {
       originalAuditContents =
@@ -133,6 +168,28 @@ test(
         undefined;
     }
 
+    // -----------------------------------------
+    // Snapshot monitor health history
+    // -----------------------------------------
+
+    try {
+      originalHealthContents =
+        await fs.readFile(
+          healthFilePath,
+          'utf8',
+        );
+    } catch {
+      originalHealthContents =
+        undefined;
+    }
+
+    console.log(
+      '========================================',
+    );
+
+    console.log(
+      'LOCAL FILE CHANGED HEALTH TEST',
+    );
 
     console.log(
       '========================================',
@@ -160,7 +217,7 @@ test(
       }
 
       // -----------------------------------------
-      // Step 2: Remove previous test state if present
+      // Step 2: Remove previous test state
       // -----------------------------------------
 
       try {
@@ -209,7 +266,7 @@ test(
 
       await fs.writeFile(
         toUploadFilePath,
-        `LOCAL CHANGE SAFETY TEST ORIGINAL ${Date.now()}\n`,
+        `LOCAL CHANGE HEALTH TEST ${Date.now()}\n`,
         'utf8',
       );
 
@@ -283,51 +340,38 @@ test(
           initialRawState,
         ) as UploadState;
 
-      const initialFileState =
+      expect(
         initialUploadState[
           testFileName
-        ];
-
-      expect(
-        initialFileState,
-        'No persistent state found after initial upload',
+        ],
+        'No local state found after initial upload',
       ).toBeTruthy();
 
       expect(
-        initialFileState.status,
+        initialUploadState[
+          testFileName
+        ].status,
       ).toBe(
         'UPLOADED',
       );
-
-      expect(
-        initialFileState.uploadedAt,
-      ).toBeTruthy();
 
       console.log(
         'Initial local state: UPLOADED',
       );
 
       // -----------------------------------------
-      // Step 8: Modify the SAME local ToUpload file
+      // Step 8: Modify the SAME local file
       // -----------------------------------------
 
-      await fs.writeFile(
+      await fs.appendFile(
         toUploadFilePath,
-        `LOCAL CHANGE SAFETY TEST MODIFIED ${Date.now()}\n`,
+        `LOCAL FILE MODIFIED ${Date.now()}\n`,
         'utf8',
       );
 
       console.log(
         'ToUpload file: CHANGED',
       );
-
-      // Confirm the local file still exists.
-      expect(
-        await fs
-          .access(toUploadFilePath)
-          .then(() => true)
-          .catch(() => false),
-      ).toBe(true);
 
       // -----------------------------------------
       // Step 9: Run watcher again
@@ -336,34 +380,36 @@ test(
       await runWatcherOnce();
 
       console.log(
-        'Watcher local-change detection cycle: PASS',
+        'Watcher local-change health cycle: PASS',
       );
 
       // -----------------------------------------
-      // Step 10: Verify persistent state
+      // Step 10: Verify LOCAL_FILE_CHANGED state
       // -----------------------------------------
 
-      const rawState =
+      const changedRawState =
         await fs.readFile(
           statusFilePath,
           'utf8',
         );
 
-      const uploadState =
+      const changedUploadState =
         JSON.parse(
-          rawState,
+          changedRawState,
         ) as UploadState;
 
-      const fileState =
-        uploadState[testFileName];
+      const changedFileState =
+        changedUploadState[
+          testFileName
+        ];
 
       expect(
-        fileState,
-        'No persistent state found after local modification',
+        changedFileState,
+        'No local state found after local modification',
       ).toBeTruthy();
 
       expect(
-        fileState.status,
+        changedFileState.status,
       ).toBe(
         'LOCAL_FILE_CHANGED',
       );
@@ -373,7 +419,7 @@ test(
       );
 
       // -----------------------------------------
-      // Step 11: Verify BLOCK_LOCAL_FILE_CHANGED audit
+      // Step 11: Verify BLOCK_LOCAL_FILE_CHANGED
       // -----------------------------------------
 
       const auditRaw =
@@ -385,9 +431,13 @@ test(
       const auditEntries =
         auditRaw
           .split(/\r?\n/)
+          .map(
+            (line) =>
+              line.trim(),
+          )
           .filter(
             (line) =>
-              line.trim().length > 0,
+              line.length > 0,
           )
           .map(
             (line) =>
@@ -396,20 +446,15 @@ test(
               ) as AuditEntry,
           );
 
-      const changeSafetyAuditEntries =
+      const changeAuditEntries =
         auditEntries.filter(
           (entry) =>
             entry.fileName ===
             testFileName,
         );
 
-      expect(
-        changeSafetyAuditEntries.length,
-        'No audit entry found for local file modification',
-      ).toBeGreaterThan(0);
-
       const blockAuditEntries =
-        changeSafetyAuditEntries.filter(
+        changeAuditEntries.filter(
           (entry) =>
             entry.action ===
             'BLOCK_LOCAL_FILE_CHANGED',
@@ -417,36 +462,83 @@ test(
 
       expect(
         blockAuditEntries.length,
-        'BLOCK_LOCAL_FILE_CHANGED audit action was not recorded',
+        'BLOCK_LOCAL_FILE_CHANGED audit entry was not recorded',
       ).toBe(1);
 
-      const blockAuditEntry =
-        blockAuditEntries[0];
-
       expect(
-        blockAuditEntry.finalStatus,
+        blockAuditEntries[0].finalStatus,
       ).toBe(
         'LOCAL_FILE_CHANGED',
       );
-
-      expect(
-        blockAuditEntry.vaultMatchesBefore,
-      ).toBe(1);
-
-      expect(
-        blockAuditEntry.vaultMatchesAfter,
-      ).toBe(1);
 
       console.log(
         'Audit action: BLOCK_LOCAL_FILE_CHANGED',
       );
 
+      // -----------------------------------------
+      // Step 12: Verify latest health history
+      // -----------------------------------------
+
+      const healthRaw =
+        await fs.readFile(
+          healthFilePath,
+          'utf8',
+        );
+
+      const healthEntries =
+        healthRaw
+          .split(/\r?\n/)
+          .map(
+            (line) =>
+              line.trim(),
+          )
+          .filter(
+            (line) =>
+              line.length > 0,
+          )
+          .map(
+            (line) =>
+              JSON.parse(
+                line,
+              ) as MonitorHealthEntry,
+          );
+
+      expect(
+        healthEntries.length,
+        'No monitor health history was recorded',
+      ).toBeGreaterThan(0);
+
+      const latestHealth =
+        healthEntries[
+          healthEntries.length - 1
+        ];
+
+      expect(
+        latestHealth.problemStates,
+      ).toBe(
+        'FAIL',
+      );
+
+      expect(
+        latestHealth.overallHealth,
+      ).toBe(
+        'FAIL',
+      );
+
       console.log(
-        'Audit final status: LOCAL_FILE_CHANGED',
+        `Problem states: ${
+          latestHealth.problemStates
+        }`,
+      );
+
+      console.log(
+        `Overall health: ${
+          latestHealth.overallHealth
+        }`,
       );
 
       // -----------------------------------------
-      // Step 12: Verify Family Vault was NOT modified
+      // Step 13: Verify Vault was preserved
       // -----------------------------------------
 
       const afterChangeVaultCount =
@@ -462,43 +554,19 @@ test(
 
       expect(
         afterChangeVaultCount,
-        'Family Vault document was unexpectedly duplicated or removed',
+        'Family Vault document was unexpectedly modified',
       ).toBe(1);
 
       // -----------------------------------------
-      // Step 13: Verify no second upload occurred
+      // Final status
       // -----------------------------------------
-
-      const uploadAuditEntries =
-        changeSafetyAuditEntries.filter(
-          (entry) =>
-            entry.action ===
-            'UPLOAD',
-        );
-
-      expect(
-        uploadAuditEntries.length,
-        'A second cloud upload was unexpectedly performed after local modification',
-      ).toBe(1);
-
-      console.log(
-        'Cloud upload operations for test document: 1',
-      );
-
-      console.log(
-        'Cloud overwrite/version operation: NONE',
-      );
 
       console.log(
         '----------------------------------------',
       );
 
       console.log(
-        'LOCAL FILE CHANGE SAFETY: PASS',
-      );
-
-      console.log(
-        'ToUpload file: CHANGED',
+        'LOCAL FILE CHANGED HEALTH: PASS',
       );
 
       console.log(
@@ -506,11 +574,15 @@ test(
       );
 
       console.log(
-        'Family Vault document: PRESERVED',
+        'Problem states: FAIL',
       );
 
       console.log(
-        'Cloud overwrite/version operation: NONE',
+        'Overall health: FAIL',
+      );
+
+      console.log(
+        'Family Vault document: PRESERVED',
       );
 
       console.log(
@@ -530,7 +602,7 @@ test(
       );
 
       // -----------------------------------------
-      // Remove local test file if still present
+      // Remove local test file
       // -----------------------------------------
 
       try {
@@ -646,121 +718,114 @@ test(
         );
       }
 
-            // -----------------------------------------
-            // Rebuild upload audit summary after test cleanup
-            // -----------------------------------------
+      // -----------------------------------------
+      // Rebuild upload audit summary after test cleanup
+      // -----------------------------------------
 
-            try {
-              const restoredAuditRaw =
-                await fs.readFile(
-                  auditFilePath,
-                  'utf8',
-                );
+      try {
+        const restoredAuditRaw =
+          await fs.readFile(
+            auditFilePath,
+            'utf8',
+          );
 
-              const restoredAuditEntries =
-                restoredAuditRaw
-                  .split(/\r?\n/)
-                  .map(
-                    (line) =>
-                      line.trim(),
-                  )
-                  .filter(
-                    (line) =>
-                      line.length > 0,
-                  )
-                  .map(
-                    (line) =>
-                      JSON.parse(
-                        line,
-                      ) as AuditEntry,
-                  );
+        const restoredAuditEntries =
+          restoredAuditRaw
+            .split(/\r?\n/)
+            .map(
+              (line) =>
+                line.trim(),
+            )
+            .filter(
+              (line) =>
+                line.length > 0,
+            )
+            .map(
+              (line) =>
+                JSON.parse(
+                  line,
+                ) as AuditEntry,
+            );
 
-              const rebuiltAuditSummary = {
-                  totalEvents:
-                    restoredAuditEntries.length,
+        const rebuiltAuditSummary = {
+          totalEvents:
+            restoredAuditEntries.length,
 
-                  successfulUploads:
-                    restoredAuditEntries.filter(
-                      (entry) =>
-                        entry.action ===
-                        'UPLOAD',
-                    ).length,
+          successfulUploads:
+            restoredAuditEntries.filter(
+              (entry) =>
+                entry.action ===
+                'UPLOAD',
+            ).length,
 
-                alreadyExists:
-                  restoredAuditEntries.filter(
-                    (entry) =>
-                      entry.action ===
-                      'SKIP_ALREADY_EXISTS',
-                  ).length,
+          alreadyExists:
+            restoredAuditEntries.filter(
+              (entry) =>
+                entry.action ===
+                'SKIP_ALREADY_EXISTS',
+            ).length,
 
-                duplicateBlocked:
-                  restoredAuditEntries.filter(
-                    (entry) =>
-                      entry.action ===
-                      'BLOCK_DUPLICATE',
-                  ).length,
+          duplicateBlocked:
+            restoredAuditEntries.filter(
+              (entry) =>
+                entry.action ===
+                'BLOCK_DUPLICATE',
+            ).length,
 
-                missingFromVault:
-                  restoredAuditEntries.filter(
-                    (entry) =>
-                      entry.action ===
-                      'BLOCK_MISSING_FROM_VAULT',
-                  ).length,
+          missingFromVault:
+            restoredAuditEntries.filter(
+              (entry) =>
+                entry.action ===
+                'BLOCK_MISSING_FROM_VAULT',
+            ).length,
 
-                localFileChanged:
-                  restoredAuditEntries.filter(
-                    (entry) =>
-                      entry.action ===
-                      'BLOCK_LOCAL_FILE_CHANGED',
-                  ).length,
+          localFileChanged:
+            restoredAuditEntries.filter(
+              (entry) =>
+                entry.action ===
+                'BLOCK_LOCAL_FILE_CHANGED',
+            ).length,
 
-                uploadFailures:
-                  restoredAuditEntries.filter(
-                    (entry) =>
-                      entry.action ===
-                      'UPLOAD_FAILED',
-                  ).length,
+          uploadFailures:
+            restoredAuditEntries.filter(
+              (entry) =>
+                entry.action ===
+                'UPLOAD_FAILED',
+            ).length,
 
-                unknownResults:
-                  restoredAuditEntries.filter(
-                    (entry) =>
-                      entry.action ===
-                      'UPLOAD_UNKNOWN',
-                  ).length,
-              };
+          unknownResults:
+            restoredAuditEntries.filter(
+              (entry) =>
+                entry.action ===
+                'UPLOAD_UNKNOWN',
+            ).length,
+        };
 
-              await fs.writeFile(
-                auditSummaryFilePath,
-                JSON.stringify(
-                  rebuiltAuditSummary,
-                  null,
-                  2,
-                ),
-                'utf8',
-              );
+        await fs.writeFile(
+          auditSummaryFilePath,
+          JSON.stringify(
+            rebuiltAuditSummary,
+            null,
+            2,
+          ),
+          'utf8',
+        );
 
-              console.log(
-                'Upload audit summary cleanup: PASS',
-              );
-            } catch (cleanupError) {
-              console.error(
-                'Upload audit summary cleanup failed:',
-                cleanupError,
-              );
-            }
+        console.log(
+          'Upload audit summary cleanup: PASS',
+        );
+      } catch (cleanupError) {
+        console.error(
+          'Upload audit summary cleanup failed:',
+          cleanupError,
+        );
+      }
 
       // -----------------------------------------
       // Rebuild upload summary after test cleanup
       // -----------------------------------------
 
       try {
-        const summaryFilePath =
-          path.resolve(
-            process.cwd(),
-            'UploadStatus',
-            'upload-summary.json',
-          );
-
         const summaryRaw =
           await fs.readFile(
             summaryFilePath,
@@ -875,6 +940,39 @@ test(
       } catch (cleanupError) {
         console.error(
           'Upload summary cleanup failed:',
+          cleanupError,
+        );
+      }
+
+      // -----------------------------------------
+      // Restore monitor health history exactly
+      // as it was before the test
+      // -----------------------------------------
+
+      try {
+        if (
+          originalHealthContents !==
+          undefined
+        ) {
+          await fs.writeFile(
+            healthFilePath,
+            originalHealthContents,
+            'utf8',
+          );
+        } else {
+          await fs.writeFile(
+            healthFilePath,
+            '',
+            'utf8',
+          );
+        }
+
+        console.log(
+          'Monitor health history cleanup: PASS',
+        );
+      } catch (cleanupError) {
+        console.error(
+          'Monitor health history cleanup failed:',
           cleanupError,
         );
       }

@@ -213,6 +213,97 @@ test(
     );
 
     // -----------------------------------------
+    // Validate health history consistency
+    // -----------------------------------------
+
+    console.log(
+      '----------------------------------------',
+    );
+
+    console.log(
+      'HEALTH HISTORY CONSISTENCY',
+    );
+
+    console.log(
+      '----------------------------------------',
+    );
+
+    let historyConsistencyFailures =
+      0;
+
+    for (
+      let index = 0;
+      index < healthEntries.length;
+      index++
+    ) {
+      const entry =
+        healthEntries[index];
+
+      const componentHealthPassed =
+        entry.stateConsistency ===
+          'PASS' &&
+        entry.auditConsistency ===
+          'PASS' &&
+        entry.problemStates ===
+          'PASS' &&
+        entry.vaultConsistency ===
+          'PASS';
+
+      const expectedOverallHealth:
+        HealthStatus =
+        componentHealthPassed
+          ? 'PASS'
+          : 'FAIL';
+
+      const recordIsConsistent =
+        entry.overallHealth ===
+        expectedOverallHealth;
+
+      if (!recordIsConsistent) {
+        historyConsistencyFailures++;
+
+        console.error(
+          `Health record #${
+            index + 1
+          } is inconsistent`,
+        );
+
+        console.error(
+          `Timestamp: ${
+            entry.timestamp
+          }`,
+        );
+
+        console.error(
+          `Expected overall health: ${
+            expectedOverallHealth
+          }`,
+        );
+
+        console.error(
+          `Actual overall health: ${
+            entry.overallHealth
+          }`,
+        );
+      }
+    }
+
+    expect(
+      historyConsistencyFailures,
+      'One or more monitor health history records have an inconsistent overallHealth value',
+    ).toBe(0);
+
+    console.log(
+      `Records checked: ${
+        healthEntries.length
+      }`,
+    );
+
+    console.log(
+      'Overall health consistency: PASS',
+    );
+
+    // -----------------------------------------
     // History summary
     // -----------------------------------------
 
