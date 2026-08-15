@@ -29,6 +29,10 @@ test('Family Vault - Cleanup versioned test documents', async ({ page }) => {
 
   console.log('Vault: PASS');
 
+  // -----------------------------------------
+  // Capture Vault baseline
+  // -----------------------------------------
+
   const beforeCount =
     await vaultPage.getDocumentCount();
 
@@ -36,22 +40,35 @@ test('Family Vault - Cleanup versioned test documents', async ({ page }) => {
     `Documents before cleanup: ${beforeCount}`,
   );
 
+  // -----------------------------------------
+  // Delete only targeted test documents
+  // -----------------------------------------
+
+  let deletedCount = 0;
+
   for (const fileName of testFiles) {
     const document = page.getByText(
       fileName,
       { exact: true },
     );
 
-    if (await document.count() === 0) {
+    const matchCount =
+      await document.count();
+
+    if (matchCount === 0) {
       console.log(
         `${fileName}: NOT FOUND — SKIPPED`,
       );
       continue;
     }
 
-    await expect(document).toBeVisible();
+    await expect(document.first()).toBeVisible();
 
-    await vaultPage.deleteTestDocument(fileName);
+    await vaultPage.deleteTestDocument(
+      fileName,
+    );
+
+    deletedCount++;
 
     console.log(
       `Deleted: ${fileName} — PASS`,
@@ -60,33 +77,69 @@ test('Family Vault - Cleanup versioned test documents', async ({ page }) => {
     await page.waitForTimeout(1000);
   }
 
+  // -----------------------------------------
+  // Verify targeted documents are removed
+  // -----------------------------------------
+
+  for (const fileName of testFiles) {
+    const document = page.getByText(
+      fileName,
+      { exact: true },
+    );
+
+    expect(
+      await document.count(),
+      `${fileName} still exists in Vault`,
+    ).toBe(0);
+  }
+
+  // -----------------------------------------
+  // Verify only targeted documents were removed
+  // -----------------------------------------
+
   const afterCount =
     await vaultPage.getDocumentCount();
+
+  const expectedAfterCount =
+    beforeCount -
+    deletedCount;
 
   console.log(
     `Documents after cleanup: ${afterCount}`,
   );
 
-  for (const fileName of testFiles) {
-    await expect(
-      page.getByText(fileName, {
-        exact: true,
-      }),
-    ).not.toBeVisible();
-  }
-
   console.log(
-    `Cleanup count comparison: ${beforeCount} → ${afterCount}`,
+    `Expected documents after cleanup: ${expectedAfterCount}`,
   );
 
   expect(
     afterCount,
-    'Vault did not return to zero documents',
-  ).toBe(0);
+    'Unexpected Vault document count after versioned test cleanup',
+  ).toBe(
+    expectedAfterCount,
+  );
 
   console.log('----------------------------------------');
-  console.log('All test documents removed: PASS');
-  console.log('Vault baseline: 0 documents');
-  console.log('Overall cleanup status: HEALTHY');
+
+  console.log(
+    `Versioned test documents deleted: ${deletedCount}`,
+  );
+
+  console.log(
+    `Vault baseline: ${beforeCount} documents`,
+  );
+
+  console.log(
+    `Vault final count: ${afterCount} documents`,
+  );
+
+  console.log(
+    'Unrelated Vault documents preserved: PASS',
+  );
+
+  console.log(
+    'Overall cleanup status: HEALTHY',
+  );
+
   console.log('----------------------------------------');
 });
