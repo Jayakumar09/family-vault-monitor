@@ -23,29 +23,63 @@ export class LoginPage {
     await expect(this.signInButton).toBeVisible();
   }
 
-  async login(
-    email: string,
-    password: string,
-  ): Promise<number> {
-    const startTime = Date.now();
+    async login(
+            email: string,
+            password: string,
+          ): Promise<number> {
+            const startTime = Date.now();
 
-    await this.emailInput.fill(email);
-    await this.passwordInput.fill(password);
+            await this.emailInput.fill(email);
+            await this.passwordInput.fill(password);
 
-    await this.signInButton.click();
+            await this.signInButton.click();
 
-    // The Family Vault is a SPA. The URL can change before
-    // the browser emits the normal "load" navigation event.
-    await this.page.waitForURL(
-      (url) => !url.pathname.endsWith('/login'),
-      {
-        timeout: 15000,
-        waitUntil: 'commit',
-      },
-    );
+            // -----------------------------------------
+            // Wait for SPA authentication to complete.
+            // -----------------------------------------
+            //
+            // The Family Vault is a SPA. Authentication
+            // may complete without a conventional browser
+            // navigation event.
+            //
+            // The reliable transition is:
+            // 1. Login form disappears.
+            // 2. URL leaves /login.
+            // 3. Authenticated Vault heading appears.
+            // -----------------------------------------
 
-    await expect(this.page).not.toHaveURL(/\/login$/);
+            await expect(
+              this.emailInput,
+            ).not.toBeVisible({
+              timeout: 15000,
+            });
 
-    return Date.now() - startTime;
-  }
+            await expect(
+              this.passwordInput,
+            ).not.toBeVisible({
+              timeout: 15000,
+            });
+
+            await expect(
+              this.signInButton,
+            ).not.toBeVisible({
+              timeout: 15000,
+            });
+
+            await expect(
+              this.page,
+            ).not.toHaveURL(/\/login$/, {
+              timeout: 15000,
+            });
+
+            await expect(
+              this.page.getByText('Your Vault', {
+                exact: true,
+              }),
+            ).toBeVisible({
+              timeout: 15000,
+            });
+
+            return Date.now() - startTime;
+          }
 }

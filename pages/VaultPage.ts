@@ -109,40 +109,7 @@ export class VaultPage {
 
     async verifyDocumentPresent(
         fileName: string,
-    ): Promise<void> {
-        await expect(
-        this.page.getByText(fileName, {
-            exact: true,
-        }),
-        ).toBeVisible({
-        timeout: 30000,
-        });
-    }
-
-    ///
-      async getDocumentMatchCount(
-        fileName: string,
-      ): Promise<number> {
-        // -----------------------------------------
-        // Wait for Vault document data
-        // -----------------------------------------
-
-        await expect(
-          this.page.getByText(
-            /documents?\s+secured/i,
-          ).first(),
-        ).toBeVisible({
-          timeout: 15000,
-        });
-
-        // Give the Vault time to finish rendering
-        // the document cards.
-        await this.page.waitForTimeout(1000);
-
-        // -----------------------------------------
-        // Find exact document names
-        // -----------------------------------------
-
+      ): Promise<void> {
         const documents =
           this.page.getByText(
             fileName,
@@ -151,41 +118,136 @@ export class VaultPage {
             },
           );
 
-        return await documents.count();
-      }
-    ///
-
-
-
-          async deleteTestDocument(
-          fileName: string,
-        ): Promise<void> {
-          // -----------------------------------------
-          // Find all matching documents
-          // -----------------------------------------
-
-          const documents = this.page.getByText(
-            fileName,
+        await expect
+          .poll(
+            async () =>
+              await documents.count(),
             {
-              exact: true,
+              timeout: 30000,
+              message:
+                `Document "${fileName}" was not found in the Vault.`,
             },
-          );
+          )
+          .toBeGreaterThan(0);
 
-          const beforeCount =
-            await documents.count();
+        await expect(
+          documents.first(),
+        ).toBeVisible({
+          timeout: 30000,
+        });
+      }
 
-          if (beforeCount === 0) {
-            throw new Error(
-              `Document "${fileName}" was not found in the Vault.`,
-            );
+    ///
+       async getDocumentMatchCount(
+    fileName: string,
+  ): Promise<number> {
+    // -----------------------------------------
+    // Wait for Vault document data
+    // -----------------------------------------
+
+    await expect(
+      this.page.getByText(
+        /documents?\s+secured/i,
+      ).first(),
+    ).toBeVisible({
+      timeout: 15000,
+    });
+
+    // Give the Vault time to finish rendering
+    // the document cards.
+    await this.page.waitForTimeout(1000);
+
+    // -----------------------------------------
+    // Find exact document names
+    // -----------------------------------------
+
+    const documents =
+      this.page.getByText(
+        fileName,
+        {
+          exact: true,
+        },
+      );
+
+    return await documents.count();
+  }
+
+  // -----------------------------------------
+  // Get all actual document filenames
+  // -----------------------------------------
+
+  async getDocumentFileNames(): Promise<string[]> {
+            // -----------------------------------------
+            // Wait for Vault document data
+            // -----------------------------------------
+
+            await expect(
+              this.page.getByText(
+                /documents?\s+secured/i,
+              ).first(),
+            ).toBeVisible({
+              timeout: 15000,
+            });
+
+            // -----------------------------------------
+            // Wait for document cards to render
+            // -----------------------------------------
+
+            const documentHeadings =
+              this.page.locator(
+                'h3.truncate.text-sm.font-semibold',
+              );
+
+            await expect
+              .poll(
+                async () =>
+                  await documentHeadings.count(),
+                {
+                  timeout: 15000,
+                  message:
+                    'Family Vault document headings were not rendered.',
+                },
+              )
+              .toBeGreaterThan(0);
+
+            // -----------------------------------------
+            // Read actual document filenames
+            // -----------------------------------------
+
+            const fileNames =
+              await documentHeadings.allTextContents();
+
+            // -----------------------------------------
+            // Normalize filenames
+            // -----------------------------------------
+
+            return fileNames
+              .map(
+                (fileName) =>
+                  fileName.trim(),
+              )
+              .filter(
+                (fileName) =>
+                  fileName.length > 0,
+              );
           }
 
+
+    ///=======
+      async getDocumentActionButton(
+          fileName: string,
+        ): Promise<Locator> {
           // -----------------------------------------
-          // Select ONE document only
+          // Find the exact document heading
           // -----------------------------------------
 
           const document =
-            documents.first();
+            this.page.getByRole('heading', {
+              name: fileName,
+              exact: true,
+            });
+
+          await expect(document).toHaveCount(1);
 
           await expect(document).toBeVisible({
             timeout: 15000,
@@ -194,8 +256,8 @@ export class VaultPage {
           await document.scrollIntoViewIfNeeded();
 
           // -----------------------------------------
-          // Find the action button belonging
-          // to this specific document card
+          // Find the document card/header containing
+          // the action button
           // -----------------------------------------
 
           const documentContainer =
@@ -203,88 +265,179 @@ export class VaultPage {
               'xpath=ancestor::*[.//button][1]',
             );
 
+          await expect(
+            documentContainer,
+          ).toHaveCount(1);
+
+          // -----------------------------------------
+          // The action button has no accessible text,
+          // aria-label, or title.
+          // The inspected DOM confirms exactly one
+          // button belongs to this document container.
+          // -----------------------------------------
+
           const actionButton =
-            documentContainer.getByRole(
-              'button',
-            );
+            documentContainer.getByRole('button');
 
           await expect(actionButton).toHaveCount(1);
 
-          await actionButton.click();
-
-          // -----------------------------------------
-          // Open Delete menu item
-          // -----------------------------------------
-
-          const deleteMenuItem =
-            this.page.getByRole(
-              'menuitem',
-              {
-                name: 'Delete',
-                exact: true,
-              },
-            );
-
-          await expect(
-            deleteMenuItem,
-          ).toBeVisible();
-
-          // -----------------------------------------
-          // Handle native confirmation
-          // -----------------------------------------
-
-          this.page.once(
-            'dialog',
-            async (dialog) => {
-              if (dialog.type() !== 'confirm') {
-                await dialog.dismiss();
-
-                throw new Error(
-                  `Unexpected browser dialog type: ${dialog.type()}`,
-                );
-              }
-
-              const expectedMessage =
-                `Delete "${fileName}"? This cannot be undone.`;
-
-              if (
-                dialog.message() !==
-                expectedMessage
-              ) {
-                await dialog.dismiss();
-
-                throw new Error(
-                  `Unexpected delete confirmation message: ${dialog.message()}`,
-                );
-              }
-
-              await dialog.accept();
-            },
-          );
-
-          // -----------------------------------------
-          // Delete selected document
-          // -----------------------------------------
-
-          await deleteMenuItem.click();
-
-          // -----------------------------------------
-          // Wait until exactly one matching
-          // document has disappeared
-          // -----------------------------------------
-
-          await expect
-            .poll(
-              async () =>
-                await documents.count(),
-              {
-                timeout: 30000,
-                message:
-                  `Document "${fileName}" was not removed from the Vault.`,
-              },
-            )
-            .toBe(beforeCount - 1);
+          return actionButton;
         }
+
+
+    ///=======
+
+          async deleteTestDocument(
+                fileName: string,
+              ): Promise<void> {
+                // -----------------------------------------
+                // Find matching document heading
+                // -----------------------------------------
+
+                const documents =
+                  this.page.getByRole(
+                    'heading',
+                    {
+                      name: fileName,
+                      exact: true,
+                    },
+                  );
+
+                // -----------------------------------------
+                // Wait for document to be available
+                // -----------------------------------------
+
+                await expect
+                  .poll(
+                    async () =>
+                      await documents.count(),
+                    {
+                      timeout: 30000,
+                      message:
+                        `Document "${fileName}" was not found in the Vault.`,
+                    },
+                  )
+                  .toBe(1);
+
+                // -----------------------------------------
+                // Select the unique document
+                // -----------------------------------------
+
+                const document =
+                  documents.first();
+
+                await expect(
+                  document,
+                ).toBeVisible({
+                  timeout: 15000,
+                });
+
+                await document.scrollIntoViewIfNeeded();
+
+                // -----------------------------------------
+                // Find the action button belonging
+                // to this specific document
+                // -----------------------------------------
+
+                const documentContainer =
+                  document.locator(
+                    'xpath=ancestor::*[.//button][1]',
+                  );
+
+                await expect(
+                  documentContainer,
+                ).toHaveCount(1);
+
+                const actionButton =
+                  documentContainer.getByRole(
+                    'button',
+                  );
+
+                await expect(
+                  actionButton,
+                ).toHaveCount(1);
+
+                await actionButton.click();
+
+                // -----------------------------------------
+                // Open Delete menu item
+                // -----------------------------------------
+
+                const deleteMenuItem =
+                  this.page.getByRole(
+                    'menuitem',
+                    {
+                      name: 'Delete',
+                      exact: true,
+                    },
+                  );
+
+                await expect(
+                  deleteMenuItem,
+                ).toBeVisible({
+                  timeout: 10000,
+                });
+
+                // -----------------------------------------
+                // Handle native confirmation
+                // -----------------------------------------
+
+                this.page.once(
+                  'dialog',
+                  async (dialog) => {
+                    if (
+                      dialog.type() !==
+                      'confirm'
+                    ) {
+                      await dialog.dismiss();
+
+                      throw new Error(
+                        `Unexpected browser dialog type: ${dialog.type()}`,
+                      );
+                    }
+
+                    const expectedMessage =
+                      `Delete "${fileName}"? This cannot be undone.`;
+
+                    if (
+                      dialog.message() !==
+                      expectedMessage
+                    ) {
+                      await dialog.dismiss();
+
+                      throw new Error(
+                        `Unexpected delete confirmation message: ${dialog.message()}`,
+                      );
+                    }
+
+                    await dialog.accept();
+                  },
+                );
+
+                // -----------------------------------------
+                // Delete selected document
+                // -----------------------------------------
+
+                await deleteMenuItem.click();
+
+                // -----------------------------------------
+                // Wait until the document is REALLY gone
+                // -----------------------------------------
+
+                await expect
+                  .poll(
+                    async () =>
+                      await documents.count(),
+                    {
+                      timeout: 30000,
+                      message:
+                        `Document "${fileName}" was not removed from the Vault.`,
+                    },
+                  )
+                  .toBe(0);
+              }
+
+  ///=======
 
 
   async logout(): Promise<number> {
